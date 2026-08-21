@@ -27,7 +27,7 @@ export function buildVeoPrompt(params: BuildVeoPromptParams): string {
 
   const sections = [
     `SCENE (block ${params.blockStartSec}s-${params.blockEndSec}s, dimension ${params.dimension}):\n${params.sceneDescription}`,
-    buildReferenceMappingRule(attachedRefs),
+    buildReferenceMappingRule(attachedRefs, params.lockedManifest),
     NO_SPOKEN_WORDS_RULE,
     IDENTITY_DIVERSITY_RULE,
     buildSingleProductInstanceRule(attachedRefs),

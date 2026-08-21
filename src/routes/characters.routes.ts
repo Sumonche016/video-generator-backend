@@ -3,6 +3,7 @@ import { z } from "zod";
 import {
   listCharacters,
   addCharacter,
+  deleteCharacter,
   setCharacterApproval,
   confirmApprovedCharacters,
 } from "../services/script.service.js";
@@ -37,6 +38,16 @@ charactersRouter.patch("/:charId", async (req, res, next) => {
     const { id: projectId, charId } = req.params as { id: string; charId: string };
     const body = approveSchema.parse(req.body);
     res.json(await setCharacterApproval(projectId, charId, body.approved));
+  } catch (err) {
+    next(err);
+  }
+});
+
+charactersRouter.delete("/:charId", async (req, res, next) => {
+  try {
+    const { id: projectId, charId } = req.params as { id: string; charId: string };
+    await deleteCharacter(projectId, charId);
+    res.status(204).send();
   } catch (err) {
     next(err);
   }

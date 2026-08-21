@@ -47,3 +47,10 @@ export async function uploadAndUnderstandProduct(input: ProductUploadInput): Pro
   advanceStage(project, "PRODUCT_UNDERSTOOD");
   return saveProject(project);
 }
+
+export async function updateProductSummary(projectId: string, understandingSummary: string): Promise<Project> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("Project not found");
+  project.product = { ...project.product, understandingSummary, status: "understood" };
+  return saveProject(project);
+}

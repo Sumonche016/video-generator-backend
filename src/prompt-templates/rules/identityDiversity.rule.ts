@@ -1,18 +1,6 @@
-export const IDENTITY_DIVERSITY_RULE = `HUMAN IDENTITY CONSISTENCY AND DIVERSITY — CRITICAL:
-Every person in this scene must be a clearly distinct individual. Do not duplicate, clone, mirror, or reuse the same face, hairstyle, body, clothing, or overall appearance across multiple people.
-
-Each non-reference person must have:
-- a unique face and facial structure
-- different hairstyle and hair color where natural
-- different age appearance
-- different height and body build
-- different clothing and accessories
-- different posture, expression, and mannerisms
-
-NO TWINS, NO CLONED EXTRAS, NO REPEATED FACES, NO IDENTICAL OUTFITS.
-
-If reference images are supplied for specific named characters, those references apply ONLY to those named characters. Never copy or propagate the face, hairstyle, clothing, or physical features of a reference character onto other characters.
-
-Background and supporting characters must look like independently cast real people from a professional live-action production, not AI-generated variations of one person.
-
-Maintain natural human diversity while keeping every person photorealistic, believable, and visually distinct.`;
+// Condensed from the CEO's original full paragraph — real Veo testing
+// showed very long, checklist-style prompts are more likely to trip Veo's
+// safety filter. This one-liner preserves the same requirement; the scene
+// description itself (see scenePlanning.template.ts) is now instructed to
+// naturally reinforce it where relevant, rather than relying on this alone.
+export const IDENTITY_DIVERSITY_RULE = `Every non-reference person is a distinct individual (unique face, hair, age, build, outfit) — no cloned extras or repeated faces; reference images apply only to their named character.`;

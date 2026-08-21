@@ -63,11 +63,12 @@ export async function deleteProject(id: string): Promise<void> {
   await deleteAssetPrefix(id);
 }
 
+// Editing/re-running an earlier step (via the UI's back-navigation) must not
+// regress or error — it's a no-op if the project is already further along.
 export function advanceStage(project: Project, next: ProjectStage): void {
   const currentIdx = STAGE_ORDER.indexOf(project.stage);
   const nextIdx = STAGE_ORDER.indexOf(next);
-  if (nextIdx < currentIdx) {
-    throw new Error(`Cannot move project stage backwards from "${project.stage}" to "${next}"`);
+  if (nextIdx > currentIdx) {
+    project.stage = next;
   }
-  project.stage = next;
 }

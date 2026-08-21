@@ -1,6 +1,7 @@
 import { Router } from "express";
+import { z } from "zod";
 import { upload } from "../middleware/upload.js";
-import { uploadAndUnderstandProduct } from "../services/product.service.js";
+import { uploadAndUnderstandProduct, updateProductSummary } from "../services/product.service.js";
 import { getProject } from "../services/project.service.js";
 
 export const productRouter = Router({ mergeParams: true });
@@ -15,6 +16,19 @@ productRouter.post("/", upload.array("images", 8), async (req, res, next) => {
       infoText,
       images: files.map((f) => ({ originalname: f.originalname, buffer: f.buffer, mimetype: f.mimetype })),
     });
+    res.json(project);
+  } catch (err) {
+    next(err);
+  }
+});
+
+const updateSummarySchema = z.object({ understandingSummary: z.string().min(1) });
+
+productRouter.patch("/", async (req, res, next) => {
+  try {
+    const { id: projectId } = req.params as { id: string };
+    const body = updateSummarySchema.parse(req.body);
+    const project = await updateProductSummary(projectId, body.understandingSummary);
     res.json(project);
   } catch (err) {
     next(err);

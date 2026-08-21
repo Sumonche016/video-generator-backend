@@ -1,0 +1,260 @@
+import { getVideoGenProvider } from "../config/providers.config.js";
+import { supabase } from "../storage/supabaseClient.js";
+import { assetPaths, uploadAsset, downloadAsset } from "../storage/assetStorage.js";
+import { measureVolumeDb, applyAudioGain } from "./audio.service.js";
+import { getProject, advanceStage, saveProject } from "./project.service.js";
+import type { Block, ClipAttempt, LockedRef } from "../models/index.js";
+
+interface BlockRow {
+  id: string;
+  project_id: string;
+  index: number;
+  start_sec: number;
+  end_sec: number;
+  transcript_text: string;
+  word_timings: Block["wordTimings"];
+  veo_prompt: string;
+  attached_reference_names: string[];
+  approval_status: Block["approvalStatus"];
+  clip_attempts: ClipAttempt[];
+  approved_clip_path: string | null;
+  audio_leveling: Block["audioLeveling"];
+}
+
+function mapBlockRow(row: BlockRow): Block {
+  return {
+    index: row.index,
+    startSec: row.start_sec,
+    endSec: row.end_sec,
+    transcriptText: row.transcript_text,
+    wordTimings: row.word_timings,
+    veoPrompt: row.veo_prompt,
+    attachedReferenceNames: row.attached_reference_names,
+    approvalStatus: row.approval_status,
+    clipAttempts: row.clip_attempts,
+    approvedClipPath: row.approved_clip_path,
+    audioLeveling: row.audio_leveling,
+  };
+}
+
+async function getBlockRow(projectId: string, index: number): Promise<BlockRow> {
+  const { data, error } = await supabase
+    .from("blocks")
+    .select()
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .single();
+  if (error) throw error;
+  return data as BlockRow;
+}
+
+function resolveReferenceImages(lockedManifest: LockedRef[], names: string[]) {
+  return lockedManifest
+    .filter((r) => names.includes(r.name))
+    .map((r) => ({ name: r.name, path: r.imagePath, role: r.kind }));
+}
+
+export async function generateNextBatch(
+  projectId: string,
+  opts?: { indices?: number[]; count?: number }
+): Promise<Block[]> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("Project not found");
+  if (!project.lockedManifest) throw new Error("Project is not locked yet");
+
+  let query = supabase
+    .from("blocks")
+    .select()
+    .eq("project_id", projectId)
+    .eq("approval_status", "prompt_approved")
+    .order("index");
+  query = opts?.indices?.length ? query.in("index", opts.indices) : query.limit(opts?.count ?? project.settings.batchSize);
+  const { data: pendingRows, error } = await query;
+  if (error) throw error;
+
+  const videoGen = getVideoGenProvider();
+
+  // All blocks in this batch are submitted to Veo simultaneously (not one
+  // at a time) — each generateClip() call only submits the job and returns
+  // a jobId immediately, so there's no reason to wait for one submission
+  // before starting the next.
+  const updated = await Promise.all(
+    (pendingRows as BlockRow[]).map(async (row) => {
+      const { jobId } = await videoGen.generateClip({
+        prompt: row.veo_prompt,
+        referenceImages: resolveReferenceImages(project.lockedManifest as LockedRef[], row.attached_reference_names),
+        durationSeconds: row.end_sec - row.start_sec,
+        dimension: project.dimension,
+      });
+
+      const attempt: ClipAttempt = { path: "", createdAt: new Date().toISOString(), status: "running", jobId };
+      const clipAttempts = [...row.clip_attempts, attempt];
+
+      const { data, error: updateError } = await supabase
+        .from("blocks")
+        .update({ clip_attempts: clipAttempts, approval_status: "clip_generating" })
+        .eq("project_id", projectId)
+        .eq("index", row.index)
+        .select()
+        .single();
+      if (updateError) throw updateError;
+      return mapBlockRow(data as BlockRow);
+    })
+  );
+
+  if (updated.length > 0) {
+    advanceStage(project, "BLOCKS_GENERATING");
+    await saveProject(project);
+  }
+
+  return updated;
+}
+
+export async function pollClipStatus(projectId: string, index: number): Promise<Block> {
+  const row = await getBlockRow(projectId, index);
+  const attempts = row.clip_attempts;
+  const latest = attempts[attempts.length - 1];
+  if (!latest || latest.status !== "running" || !latest.jobId) {
+    return mapBlockRow(row);
+  }
+
+  const videoGen = getVideoGenProvider();
+  const status = await videoGen.pollStatus(latest.jobId);
+
+  if (status.status === "running" || status.status === "pending") {
+    return mapBlockRow(row);
+  }
+
+  if (status.status === "failed") {
+    latest.status = "failed";
+    latest.error = status.error;
+    const { data, error } = await supabase
+      .from("blocks")
+      .update({ clip_attempts: attempts, approval_status: "prompt_approved" })
+      .eq("project_id", projectId)
+      .eq("index", index)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapBlockRow(data as BlockRow);
+  }
+
+  // succeeded — download from the provider's temporary URL and persist into our own storage.
+  const videoRes = await fetch(status.videoUrl as string);
+  if (!videoRes.ok) throw new Error(`Failed to download generated clip: ${videoRes.status}`);
+  const buffer = Buffer.from(await videoRes.arrayBuffer());
+  const objectKey = assetPaths.blockClip(projectId, index, `attempt-${attempts.length}.mp4`);
+  await uploadAsset(objectKey, buffer, "video/mp4");
+
+  latest.status = "succeeded";
+  latest.path = objectKey;
+
+  // Per the CEO's spec: auto-check the clip's audio volume against the
+  // voiceover's — the tool measures both automatically here; whether to
+  // duck it down is left as a manual human decision for now (see
+  // applyDucking / the audio-level endpoint), not applied automatically.
+  const audioLeveling = { ...row.audio_leveling };
+  try {
+    const project = await getProject(projectId);
+    if (project?.voiceover) {
+      const { buffer: voiceoverBuffer } = await downloadAsset(project.voiceover.mp3Path);
+      const [clipDb, voiceoverDb] = await Promise.all([
+        measureVolumeDb(buffer, "mp4"),
+        measureVolumeDb(voiceoverBuffer, "mp3"),
+      ]);
+      audioLeveling.veoClipVolumeDb = clipDb;
+      audioLeveling.voiceoverVolumeDb = voiceoverDb;
+    }
+  } catch {
+    // Volume measurement is a nice-to-have signal for the human reviewer,
+    // not a hard requirement — never fail clip generation because of it.
+  }
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update({ clip_attempts: attempts, approval_status: "clip_review", audio_leveling: audioLeveling })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapBlockRow(data as BlockRow);
+}
+
+export async function applyDucking(projectId: string, index: number, duckingFactor: number): Promise<Block> {
+  const row = await getBlockRow(projectId, index);
+  const latest = row.clip_attempts[row.clip_attempts.length - 1];
+  const clipPath = latest?.status === "succeeded" && latest.path ? latest.path : row.approved_clip_path;
+  if (!clipPath) {
+    throw new Error("No succeeded or approved clip to apply audio ducking to");
+  }
+
+  const { buffer } = await downloadAsset(clipPath);
+  const ducked = await applyAudioGain(buffer, duckingFactor);
+  await uploadAsset(clipPath, ducked, "video/mp4");
+  const newClipDb = await measureVolumeDb(ducked, "mp4");
+
+  const audioLeveling = {
+    ...row.audio_leveling,
+    veoClipVolumeDb: newClipDb,
+    duckingApplied: true,
+    duckingFactor,
+  };
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update({ audio_leveling: audioLeveling })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapBlockRow(data as BlockRow);
+}
+
+export async function approveClip(projectId: string, index: number): Promise<Block> {
+  const row = await getBlockRow(projectId, index);
+  const latest = row.clip_attempts[row.clip_attempts.length - 1];
+  if (!latest || latest.status !== "succeeded") {
+    throw new Error("No succeeded clip attempt to approve for this block");
+  }
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update({ approval_status: "approved", approved_clip_path: latest.path })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
+
+  const project = await getProject(projectId);
+  if (project) {
+    const { data: remaining } = await supabase
+      .from("blocks")
+      .select("index")
+      .eq("project_id", projectId)
+      .neq("approval_status", "approved");
+    if (!remaining || remaining.length === 0) {
+      advanceStage(project, "BLOCKS_APPROVED");
+      await saveProject(project);
+    }
+  }
+
+  return mapBlockRow(data as BlockRow);
+}
+
+export async function rejectClip(projectId: string, index: number, newPrompt?: string): Promise<Block> {
+  const updates: Record<string, unknown> = { approval_status: "prompt_approved" };
+  if (newPrompt !== undefined) updates.veo_prompt = newPrompt;
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update(updates)
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapBlockRow(data as BlockRow);
+}

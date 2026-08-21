@@ -19,7 +19,10 @@ export interface GenerateClipResult {
 
 export interface ClipStatusResult {
   status: "pending" | "running" | "succeeded" | "failed";
-  videoPath?: string;
+  // External, temporary URL to the generated video (provider-hosted) — the
+  // caller is responsible for downloading and persisting it into our own
+  // storage; it is not guaranteed to stay valid long-term.
+  videoUrl?: string;
   error?: string;
 }
 

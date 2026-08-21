@@ -20,33 +20,55 @@ export async function uploadScriptAndExtractCharacters(
   const llm = getLLMProvider();
   const result = await llm.chat({
     systemPrompt: CHARACTER_EXTRACTION_SYSTEM_PROMPT,
-    messages: [{ role: "user", content: buildCharacterExtractionUserMessage(scriptText) }],
+    messages: [
+      {
+        role: "user",
+        content: buildCharacterExtractionUserMessage(scriptText, project.product.understandingSummary),
+      },
+    ],
     responseFormat: "json",
   });
 
   const extracted = parseCharacterExtractionResponse(result.text);
 
-  const rows = extracted.map((c) => ({
-    project_id: projectId,
-    name: c.name.trim(),
-    slug: slugify(c.name),
-    description: c.description ?? "",
-    source: "ai" as const,
-    approved: false,
-  }));
+  // Re-running script analysis on a project that already has characters must
+  // not crash (duplicate slug) or wipe out approval/bible progress already
+  // made on existing characters — only insert genuinely new ones.
+  const existing = await listCharacters(projectId);
+  const existingSlugs = new Set(existing.map((c) => c.slug));
 
-  let characters: Character[] = [];
-  if (rows.length > 0) {
-    const { data, error } = await supabase.from("characters").insert(rows).select();
+  const newRows = extracted
+    .filter((c) => !existingSlugs.has(slugify(c.name)))
+    .map((c) => ({
+      project_id: projectId,
+      name: c.name.trim(),
+      slug: slugify(c.name),
+      description: c.description ?? "",
+      source: "ai" as const,
+      approved: false,
+    }));
+
+  let inserted: Character[] = [];
+  if (newRows.length > 0) {
+    const { data, error } = await supabase.from("characters").insert(newRows).select();
     if (error) throw error;
-    characters = (data ?? []).map(mapCharacterRow);
+    inserted = (data ?? []).map(mapCharacterRow);
   }
 
   project.script = { text: scriptText, status: "analyzed" };
   advanceStage(project, "SCRIPT_ANALYZED");
   const savedProject = await saveProject(project);
 
-  return { project: savedProject, characters };
+  return { project: savedProject, characters: [...existing, ...inserted] };
+}
+
+export async function deleteCharacter(projectId: string, characterId: string): Promise<void> {
+  const { error } = await supabase
+    .from("characters")
+    .delete()
+    .eq("id", characterId)
+    .eq("project_id", projectId);
+  if (error) throw error;
 }
 
 export async function listCharacters(projectId: string): Promise<Character[]> {

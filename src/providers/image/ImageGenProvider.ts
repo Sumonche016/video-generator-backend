@@ -1,6 +1,9 @@
 export interface ImageGenParams {
   prompt: string;
-  referenceImages?: { path?: string; base64?: string }[];
+  // Actual image bytes to condition generation on (e.g. the user's uploaded
+  // product photo) — without these, the model only has the text prompt to
+  // go on and will hallucinate visual details it was never shown.
+  referenceImages?: { buffer: Buffer; mimeType?: string }[];
   n: number;
   size?: string;
 }
