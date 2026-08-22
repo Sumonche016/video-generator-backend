@@ -1,6 +1,12 @@
 import type { LockedRef } from "../../models/index.js";
 import { assignCharacterTags } from "../characterTags.js";
+import { renderPrompt } from "../../config/promptRegistry.js";
 
+// The wrapper text itself now lives in config/promptRegistry.ts
+// (REFERENCE_MAPPING_RULE, with a {{LINES}} placeholder), editable from the
+// web app. Only the per-call, per-reference line generation stays here as
+// plain code (it loops over dynamic refs, so isn't itself a static template).
+//
 // Verified via real Veo testing: sending 2+ photorealistic human reference
 // images together in one call gets blocked by Veo's safety filter almost
 // every time — UNLESS each image is explicitly bound to a <character_N> tag
@@ -20,5 +26,5 @@ export function buildReferenceMappingRule(refs: LockedRef[], fullManifest: Locke
     return `- ${tags.get(r.name)} refers to the person shown in that reference image — use their exact likeness (face, build, styling).`;
   });
 
-  return `REFERENCE IMAGE MAPPING — CRITICAL:\n${lines.join("\n")}\nDo not use any real name for these people in the generated video — they are fictional characters for this ad.`;
+  return renderPrompt("REFERENCE_MAPPING_RULE", { "{{LINES}}": lines.join("\n") });
 }

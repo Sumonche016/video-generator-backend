@@ -1,11 +1,11 @@
 import { getLLMProvider } from "../config/providers.config.js";
+import { getPrompt } from "../config/promptRegistry.js";
 import { supabase } from "../storage/supabaseClient.js";
 import { downloadAsset, uploadAsset, assetPaths } from "../storage/assetStorage.js";
 import { getProject, saveProject, advanceStage, assertStageAtLeast } from "./project.service.js";
 import { parseElevenLabsTranscript } from "./voiceover.service.js";
 import { buildVeoPrompt } from "../prompt-templates/veoPromptTemplate.js";
 import {
-  SCENE_PLANNING_SYSTEM_PROMPT,
   buildScenePlanningUserMessage,
   parseScenePlanningBatchResponse,
 } from "../prompt-templates/scenePlanning.template.js";
@@ -121,7 +121,7 @@ export async function generateNextPromptBatch(projectId: string): Promise<Block[
   const lockedManifest = project.lockedManifest;
 
   const planResult = await llm.chat({
-    systemPrompt: SCENE_PLANNING_SYSTEM_PROMPT,
+    systemPrompt: getPrompt("SCENE_PLANNING_SYSTEM_PROMPT"),
     messages: [
       {
         role: "user",

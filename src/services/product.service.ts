@@ -1,10 +1,8 @@
 import { getLLMProvider } from "../config/providers.config.js";
+import { getPrompt } from "../config/promptRegistry.js";
 import { assetPaths, uploadAsset, getSignedAssetUrl } from "../storage/assetStorage.js";
 import { getProject, saveProject, advanceStage } from "./project.service.js";
-import {
-  PRODUCT_UNDERSTANDING_SYSTEM_PROMPT,
-  buildProductUnderstandingUserMessage,
-} from "../prompt-templates/productUnderstanding.template.js";
+import { buildProductUnderstandingUserMessage } from "../prompt-templates/productUnderstanding.template.js";
 import type { Project } from "../models/index.js";
 
 export interface ProductUploadInput {
@@ -28,7 +26,7 @@ export async function uploadAndUnderstandProduct(input: ProductUploadInput): Pro
 
   const llm = getLLMProvider();
   const result = await llm.chat({
-    systemPrompt: PRODUCT_UNDERSTANDING_SYSTEM_PROMPT,
+    systemPrompt: getPrompt("PRODUCT_UNDERSTANDING_SYSTEM_PROMPT"),
     messages: [
       {
         role: "user",

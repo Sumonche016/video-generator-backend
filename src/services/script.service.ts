@@ -1,8 +1,8 @@
 import { getLLMProvider } from "../config/providers.config.js";
+import { getPrompt } from "../config/promptRegistry.js";
 import { supabase } from "../storage/supabaseClient.js";
 import { getProject, saveProject, advanceStage, assertStageAtLeast } from "./project.service.js";
 import {
-  CHARACTER_EXTRACTION_SYSTEM_PROMPT,
   buildCharacterExtractionUserMessage,
   parseCharacterExtractionResponse,
 } from "../prompt-templates/characterExtraction.template.js";
@@ -19,7 +19,7 @@ export async function uploadScriptAndExtractCharacters(
 
   const llm = getLLMProvider();
   const result = await llm.chat({
-    systemPrompt: CHARACTER_EXTRACTION_SYSTEM_PROMPT,
+    systemPrompt: getPrompt("CHARACTER_EXTRACTION_SYSTEM_PROMPT"),
     messages: [
       {
         role: "user",

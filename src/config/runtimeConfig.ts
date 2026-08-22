@@ -32,9 +32,12 @@ export async function loadRuntimeConfig(): Promise<void> {
 }
 
 export async function updateApiKey(key: RuntimeApiKeyName, value: string): Promise<void> {
-  runtimeConfig[key] = value;
+  // Persist first — only reflect the change in-memory once it's actually
+  // saved, so a failed write (e.g. migration not run yet) can't leave a
+  // phantom key in effect that the database doesn't agree with.
   const { error } = await supabase.from("app_settings").upsert({ key, value, updated_at: new Date().toISOString() });
   if (error) throw error;
+  runtimeConfig[key] = value;
 }
 
 // Masked for display — never send the real key back to the browser once saved.

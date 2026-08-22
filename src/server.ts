@@ -1,11 +1,12 @@
 import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { loadRuntimeConfig } from "./config/runtimeConfig.js";
+import { loadPromptOverrides } from "./config/promptRegistry.js";
 
 async function main() {
-  // Pull in any API keys saved from the Settings page before serving
-  // requests, so a previous key change survives a server restart.
-  await loadRuntimeConfig();
+  // Pull in any API keys / prompt edits saved from the web app before
+  // serving requests, so they survive a server restart.
+  await Promise.all([loadRuntimeConfig(), loadPromptOverrides()]);
 
   const app = createApp();
   app.listen(env.PORT, () => {

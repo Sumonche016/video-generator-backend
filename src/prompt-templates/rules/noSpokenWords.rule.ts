@@ -1,3 +1,7 @@
-export const NO_SPOKEN_WORDS_RULE = `AUDIO — CRITICAL:
-The generated clip must contain NO spoken words, dialogue, or narration audio.
-The human voiceover carries all narration and will be synced separately; the video track's own audio (if any) must be non-verbal (silent, or ambient/sound-effects only).`;
+import { getPrompt } from "../../config/promptRegistry.js";
+
+// The rule text itself now lives in config/promptRegistry.ts
+// (NO_SPOKEN_WORDS_RULE), editable from the web app.
+export function getNoSpokenWordsRule(): string {
+  return getPrompt("NO_SPOKEN_WORDS_RULE");
+}
