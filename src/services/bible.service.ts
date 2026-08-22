@@ -5,7 +5,11 @@ import { getProject, saveProject } from "./project.service.js";
 import { buildCharacterBiblePrompt, buildProductBiblePrompt } from "../prompt-templates/bibleGeneration.template.js";
 import type { BibleAsset, Character } from "../models/index.js";
 
-const CANDIDATE_COUNT = 4;
+// Generating multiple candidates per bible costs money for images that get
+// thrown away the moment one is picked — one high-quality generation per
+// bible avoids that waste (see prompt-templates/bibleGeneration.template.ts
+// for the detailed, quality-focused prompt this relies on instead).
+const CANDIDATE_COUNT = 1;
 
 interface CharacterRow {
   id: string;

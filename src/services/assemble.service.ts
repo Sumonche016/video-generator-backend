@@ -12,8 +12,11 @@ const execFileAsync = promisify(execFile);
 
 interface BlockRow {
   index: number;
+  start_sec: number;
+  end_sec: number;
   approval_status: Block["approvalStatus"];
   approved_clip_path: string | null;
+  clip_attempts: { path: string; status: string }[];
 }
 
 export class AssembleValidationError extends Error {
@@ -23,73 +26,126 @@ export class AssembleValidationError extends Error {
   }
 }
 
-export async function assembleProject(projectId: string) {
+// Builds one muxed mp4 from a list of (video clip, matching voiceover slice)
+// pairs — used for both the full final export and the quick preview merge.
+// Slicing the voiceover per-block (rather than overlaying the whole file
+// once) is what keeps video and narration in sync even when the blocks are
+// a partial or non-contiguous subset: each clip only ever plays against its
+// own [startSec, endSec) of narration, so skipped blocks just shrink both
+// tracks together instead of leaving a sync-breaking gap.
+async function buildSyncedVideo(
+  voiceoverPath: string,
+  blocks: { index: number; startSec: number; endSec: number; clipPath: string }[],
+  tmpDir: string
+): Promise<string> {
+  const clipLocalPaths: string[] = [];
+  const audioSegmentPaths: string[] = [];
+
+  for (const b of blocks) {
+    const { buffer } = await downloadAsset(b.clipPath);
+    const clipLocalPath = path.join(tmpDir, `clip-${b.index}.mp4`);
+    await fs.writeFile(clipLocalPath, buffer);
+    clipLocalPaths.push(clipLocalPath);
+
+    const segmentPath = path.join(tmpDir, `voiceover-${b.index}.mp3`);
+    await execFileAsync("ffmpeg", [
+      "-y",
+      "-i", voiceoverPath,
+      "-ss", String(b.startSec),
+      "-to", String(b.endSec),
+      "-c", "copy",
+      segmentPath,
+    ]);
+    audioSegmentPaths.push(segmentPath);
+  }
+
+  const videoConcatListPath = path.join(tmpDir, "video-concat.txt");
+  await fs.writeFile(
+    videoConcatListPath,
+    clipLocalPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n")
+  );
+  const concatenatedVideoPath = path.join(tmpDir, "concatenated-video.mp4");
+  await execFileAsync("ffmpeg", [
+    "-y",
+    "-f", "concat",
+    "-safe", "0",
+    "-i", videoConcatListPath,
+    "-c", "copy",
+    concatenatedVideoPath,
+  ]);
+
+  const audioConcatListPath = path.join(tmpDir, "audio-concat.txt");
+  await fs.writeFile(
+    audioConcatListPath,
+    audioSegmentPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n")
+  );
+  const concatenatedAudioPath = path.join(tmpDir, "concatenated-audio.mp3");
+  await execFileAsync("ffmpeg", [
+    "-y",
+    "-f", "concat",
+    "-safe", "0",
+    "-i", audioConcatListPath,
+    "-c", "copy",
+    concatenatedAudioPath,
+  ]);
+
+  const outputPath = path.join(tmpDir, "output.mp4");
+  await execFileAsync("ffmpeg", [
+    "-y",
+    "-i", concatenatedVideoPath,
+    "-i", concatenatedAudioPath,
+    "-map", "0:v:0",
+    "-map", "1:a:0",
+    "-c:v", "copy",
+    "-c:a", "aac",
+    "-shortest",
+    outputPath,
+  ]);
+
+  return outputPath;
+}
+
+export async function assembleProject(
+  projectId: string
+): Promise<{ project: Awaited<ReturnType<typeof saveProject>>; skippedBlockIndices: number[] }> {
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
   if (!project.voiceover) throw new Error("No voiceover uploaded");
 
   const { data: rows, error } = await supabase
     .from("blocks")
-    .select("index, approval_status, approved_clip_path")
+    .select("index, start_sec, end_sec, approval_status, approved_clip_path, clip_attempts")
     .eq("project_id", projectId)
     .order("index");
   if (error) throw error;
 
-  const blocks = rows as BlockRow[];
-  const issues: string[] = [];
-  if (blocks.length === 0) issues.push("No blocks planned yet");
-  for (const b of blocks) {
-    if (b.approval_status !== "approved" || !b.approved_clip_path) {
-      issues.push(`Block ${b.index} is not approved yet`);
-    }
+  const allBlocks = rows as BlockRow[];
+  const approvedBlocks = allBlocks.filter((b) => b.approval_status === "approved" && b.approved_clip_path);
+  const skippedBlockIndices = allBlocks
+    .filter((b) => !(b.approval_status === "approved" && b.approved_clip_path))
+    .map((b) => b.index);
+
+  if (allBlocks.length === 0) throw new AssembleValidationError(["No blocks planned yet"]);
+  if (approvedBlocks.length === 0) {
+    throw new AssembleValidationError(["No approved scenes to assemble yet — approve at least one scene first"]);
   }
-  if (issues.length > 0) throw new AssembleValidationError(issues);
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "assemble-"));
   try {
-    // Download each approved clip and the voiceover into local temp files —
-    // ffmpeg needs real files on disk, not in-memory buffers/streams.
-    const clipPaths: string[] = [];
-    for (const b of blocks) {
-      const { buffer } = await downloadAsset(b.approved_clip_path as string);
-      const clipPath = path.join(tmpDir, `block-${b.index}.mp4`);
-      await fs.writeFile(clipPath, buffer);
-      clipPaths.push(clipPath);
-    }
-
     const { buffer: voiceoverBuffer } = await downloadAsset(project.voiceover.mp3Path);
     const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
     await fs.writeFile(voiceoverPath, voiceoverBuffer);
 
-    // Concatenate clips in block order (all generated by the same Veo model
-    // with identical codec/resolution, so a stream-copy concat is safe).
-    const concatListPath = path.join(tmpDir, "concat.txt");
-    await fs.writeFile(concatListPath, clipPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"));
-    const concatenatedPath = path.join(tmpDir, "concatenated.mp4");
-    await execFileAsync("ffmpeg", [
-      "-y",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", concatListPath,
-      "-c", "copy",
-      concatenatedPath,
-    ]);
-
-    // Mux with the voiceover as the sole audio track (working assumption per
-    // the plan — final-mix behavior, e.g. keeping some clip ambience under
-    // the voiceover, is still an open decision to revisit later).
-    const outputPath = path.join(tmpDir, "final.mp4");
-    await execFileAsync("ffmpeg", [
-      "-y",
-      "-i", concatenatedPath,
-      "-i", voiceoverPath,
-      "-map", "0:v:0",
-      "-map", "1:a:0",
-      "-c:v", "copy",
-      "-c:a", "aac",
-      "-shortest",
-      outputPath,
-    ]);
+    const outputPath = await buildSyncedVideo(
+      voiceoverPath,
+      approvedBlocks.map((b) => ({
+        index: b.index,
+        startSec: b.start_sec,
+        endSec: b.end_sec,
+        clipPath: b.approved_clip_path as string,
+      })),
+      tmpDir
+    );
 
     const finalBuffer = await fs.readFile(outputPath);
     const filename = `output-${project.dimension}-${Date.now()}.mp4`;
@@ -98,65 +154,52 @@ export async function assembleProject(projectId: string) {
 
     project.finalOutputPath = objectKey;
     advanceStage(project, "ASSEMBLED");
-    return saveProject(project);
+    const saved = await saveProject(project);
+    return { project: saved, skippedBlockIndices };
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 }
 
 // Quick sanity-check merge of whatever clips have been generated so far —
-// unlike assembleProject, this does NOT require every block to be approved
-// and does NOT mux in the voiceover; it's just a fast "does the visual flow
-// between these clips look right" preview while testing generation on a
-// handful of scenes at a time.
+// unlike assembleProject, this does NOT require every block to be approved.
+// Plays the real voiceover synced to whichever scenes are shown (sliced
+// per-block, same as the final export), not each clip's own raw audio.
 export async function mergePreviewClips(projectId: string): Promise<{ url: string; mergedCount: number }> {
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
+  if (!project.voiceover) throw new Error("No voiceover uploaded");
 
   const { data: rows, error } = await supabase
     .from("blocks")
-    .select("index, approval_status, approved_clip_path, clip_attempts")
+    .select("index, start_sec, end_sec, approval_status, approved_clip_path, clip_attempts")
     .eq("project_id", projectId)
     .order("index");
   if (error) throw error;
 
-  interface PreviewRow {
-    index: number;
-    approval_status: Block["approvalStatus"];
-    approved_clip_path: string | null;
-    clip_attempts: { path: string; status: string }[];
-  }
-
-  const clipPaths: string[] = [];
-  for (const row of rows as PreviewRow[]) {
+  const blocks: { index: number; startSec: number; endSec: number; clipPath: string }[] = [];
+  for (const row of rows as BlockRow[]) {
     if (row.approval_status !== "clip_review" && row.approval_status !== "approved") continue;
     const latestSucceeded = [...row.clip_attempts].reverse().find((a) => a.status === "succeeded");
-    const path = row.approved_clip_path ?? latestSucceeded?.path;
-    if (path) clipPaths.push(path);
+    const clipPath = row.approved_clip_path ?? latestSucceeded?.path;
+    if (clipPath) blocks.push({ index: row.index, startSec: row.start_sec, endSec: row.end_sec, clipPath });
   }
 
-  if (clipPaths.length === 0) throw new Error("No generated clips to merge yet");
+  if (blocks.length === 0) throw new Error("No generated clips to merge yet");
 
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "merge-preview-"));
   try {
-    const localPaths: string[] = [];
-    for (let i = 0; i < clipPaths.length; i++) {
-      const { buffer } = await downloadAsset(clipPaths[i]);
-      const localPath = path.join(tmpDir, `clip-${i}.mp4`);
-      await fs.writeFile(localPath, buffer);
-      localPaths.push(localPath);
-    }
+    const { buffer: voiceoverBuffer } = await downloadAsset(project.voiceover.mp3Path);
+    const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
+    await fs.writeFile(voiceoverPath, voiceoverBuffer);
 
-    const concatListPath = path.join(tmpDir, "concat.txt");
-    await fs.writeFile(concatListPath, localPaths.map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n"));
-    const outputPath = path.join(tmpDir, "preview.mp4");
-    await execFileAsync("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", outputPath]);
+    const outputPath = await buildSyncedVideo(voiceoverPath, blocks, tmpDir);
 
     const buffer = await fs.readFile(outputPath);
     const objectKey = assetPaths.preview(projectId, `preview-${Date.now()}.mp4`);
     await uploadAsset(objectKey, buffer, "video/mp4");
 
-    return { url: await getSignedAssetUrl(objectKey), mergedCount: clipPaths.length };
+    return { url: await getSignedAssetUrl(objectKey), mergedCount: blocks.length };
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }

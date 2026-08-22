@@ -8,13 +8,21 @@ import type {
 } from "./VideoGenProvider.js";
 
 // Verified against the real API (see conversation history / plan doc):
-// - Model: veo-3.1-fast-generate-preview (async job via predictLongRunning).
+// - Model picked PER CLIP, not globally: veo-3.1-lite-generate-preview flatly
+//   rejects any request that includes referenceImages ("referenceImages
+//   isn't supported by this model", 400 INVALID_ARGUMENT) — confirmed live.
+//   So scenes with no reference images attached (pure b-roll/pain-point
+//   shots — often the majority of a script) use the cheaper Lite tier
+//   ($0.05/sec vs $0.10/sec @ 720p), while any scene that actually needs
+//   character/product consistency falls back to Fast, the cheapest tier
+//   that does support referenceImages (confirmed in real testing).
 // - Reference images: referenceImages: [{ image: { bytesBase64Encoded, mimeType }, referenceType: "asset" }],
 //   accepts 1+ images, confirmed to actually condition both product shape and
 //   character likeness in real test generations.
 // - Output: ~8s, 1280x720 for aspectRatio "16:9", h264+aac, via a downloadable
 //   file URI once the operation is done.
-const MODEL = "veo-3.1-fast-generate-preview";
+const MODEL_WITH_REFERENCES = "veo-3.1-fast-generate-preview";
+const MODEL_NO_REFERENCES = "veo-3.1-lite-generate-preview";
 const API_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
 const DIMENSION_TO_ASPECT_RATIO: Record<string, string> = {
@@ -45,7 +53,8 @@ export class VeoProvider implements VideoGenProvider {
       },
     };
 
-    const res = await fetch(`${API_BASE}/models/${MODEL}:predictLongRunning?key=${env.GOOGLE_API_KEY}`, {
+    const model = referenceImages.length > 0 ? MODEL_WITH_REFERENCES : MODEL_NO_REFERENCES;
+    const res = await fetch(`${API_BASE}/models/${model}:predictLongRunning?key=${env.GOOGLE_API_KEY}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

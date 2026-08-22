@@ -55,13 +55,38 @@ export async function lockProject(projectId: string): Promise<Project> {
 export async function getLockedManifestWithUrls(projectId: string) {
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
-  if (!project.lockedManifest) return { locked: false, manifest: [] };
 
-  const manifest = await Promise.all(
-    project.lockedManifest.map(async (ref) => ({
-      ...ref,
-      url: await getSignedAssetUrl(ref.imagePath),
-    }))
+  if (project.lockedManifest) {
+    const manifest = await Promise.all(
+      project.lockedManifest.map(async (ref) => ({
+        ...ref,
+        url: await getSignedAssetUrl(ref.imagePath),
+      }))
+    );
+    return { locked: true, manifest };
+  }
+
+  // Not locked yet — show a preview of whatever character/product bibles
+  // are already approved, built the same way lockProject() would, so the
+  // "Everything Locked" step isn't just a blank screen before you commit.
+  const characters = await listCharacters(projectId);
+  const approvedCharacters = characters.filter(
+    (c) => c.approved && c.bible.status === "approved" && c.bible.approvedImagePath
   );
-  return { locked: true, manifest };
+  const previewRefs: LockedRef[] = approvedCharacters.map((c) => ({
+    name: c.name.replace(/\s+/g, ""),
+    kind: "character" as const,
+    imagePath: c.bible.approvedImagePath as string,
+  }));
+  if (project.bibles.product.status === "approved" && project.bibles.product.approvedImagePath) {
+    previewRefs.push({
+      name: "ProductBible",
+      kind: "product" as const,
+      imagePath: project.bibles.product.approvedImagePath,
+    });
+  }
+  const manifest = await Promise.all(
+    previewRefs.map(async (ref) => ({ ...ref, url: await getSignedAssetUrl(ref.imagePath) }))
+  );
+  return { locked: false, manifest };
 }
