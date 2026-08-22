@@ -11,6 +11,7 @@ import { blocksRouter } from "./routes/blocks.routes.js";
 import { clipsRouter } from "./routes/clips.routes.js";
 import { assembleRouter } from "./routes/assemble.routes.js";
 import { finalRouter } from "./routes/final.routes.js";
+import { settingsRouter } from "./routes/settings.routes.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 export function createApp() {
@@ -34,6 +35,7 @@ export function createApp() {
   app.use("/api/projects/:id/blocks", clipsRouter);
   app.use("/api/projects/:id/assemble", assembleRouter);
   app.use("/api/projects/:id/final", finalRouter);
+  app.use("/api/settings", settingsRouter);
 
   app.use(errorHandler);
   return app;

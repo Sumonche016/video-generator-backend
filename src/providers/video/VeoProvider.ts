@@ -1,4 +1,4 @@
-import { env } from "../../config/env.js";
+import { runtimeConfig } from "../../config/runtimeConfig.js";
 import { downloadAsset } from "../../storage/assetStorage.js";
 import type {
   VideoGenProvider,
@@ -54,7 +54,7 @@ export class VeoProvider implements VideoGenProvider {
     };
 
     const model = referenceImages.length > 0 ? MODEL_WITH_REFERENCES : MODEL_NO_REFERENCES;
-    const res = await fetch(`${API_BASE}/models/${model}:predictLongRunning?key=${env.GOOGLE_API_KEY}`, {
+    const res = await fetch(`${API_BASE}/models/${model}:predictLongRunning?key=${runtimeConfig.GOOGLE_API_KEY}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -70,7 +70,7 @@ export class VeoProvider implements VideoGenProvider {
   }
 
   async pollStatus(jobId: string): Promise<ClipStatusResult> {
-    const res = await fetch(`${API_BASE}/${jobId}?key=${env.GOOGLE_API_KEY}`);
+    const res = await fetch(`${API_BASE}/${jobId}?key=${runtimeConfig.GOOGLE_API_KEY}`);
     if (!res.ok) {
       const errText = await res.text();
       return { status: "failed", error: `Veo pollStatus failed: ${res.status} ${errText}` };
@@ -107,6 +107,6 @@ export class VeoProvider implements VideoGenProvider {
     if (!videoUrl) {
       return { status: "failed", error: "Veo job finished but no video URI was returned" };
     }
-    return { status: "succeeded", videoUrl: `${videoUrl}&key=${env.GOOGLE_API_KEY}` };
+    return { status: "succeeded", videoUrl: `${videoUrl}&key=${runtimeConfig.GOOGLE_API_KEY}` };
   }
 }

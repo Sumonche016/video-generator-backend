@@ -41,3 +41,15 @@ export function getVideoGenProvider(): VideoGenProvider {
   }
   return videoGenProvider;
 }
+
+// Providers that construct a vendor SDK client (e.g. OpenAI's) bake the API
+// key in at construction time, so saving a new key from the Settings page
+// must drop the cached instance — the next getLLMProvider()/
+// getImageGenProvider() call then rebuilds it with the fresh key. VeoProvider
+// reads its key fresh per-call already, so it doesn't need resetting, but
+// clearing it too is harmless and keeps this simple/uniform.
+export function resetProviders(): void {
+  llmProvider = null;
+  imageGenProvider = null;
+  videoGenProvider = null;
+}

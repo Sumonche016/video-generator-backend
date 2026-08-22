@@ -1,5 +1,5 @@
 import OpenAI, { toFile } from "openai";
-import { env } from "../../config/env.js";
+import { runtimeConfig } from "../../config/runtimeConfig.js";
 import type { LLMProvider, LLMChatParams, LLMChatResult } from "../llm/LLMProvider.js";
 import type { ImageGenProvider, ImageGenParams, ImageGenResult } from "../image/ImageGenProvider.js";
 import { createSerialQueue } from "../../utils/serialQueue.js";
@@ -22,7 +22,7 @@ export class OpenAIProvider implements LLMProvider, ImageGenProvider {
   constructor() {
     // maxRetries lets the SDK auto-retry 429s with backoff (it honors the
     // API's Retry-After hint) instead of surfacing the error to the user.
-    this.client = new OpenAI({ apiKey: env.OPENAI_API_KEY, maxRetries: 5 });
+    this.client = new OpenAI({ apiKey: runtimeConfig.OPENAI_API_KEY, maxRetries: 5 });
   }
 
   async chat(params: LLMChatParams): Promise<LLMChatResult> {
