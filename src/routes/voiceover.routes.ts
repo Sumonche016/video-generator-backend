@@ -2,6 +2,7 @@ import { Router } from "express";
 import { upload } from "../middleware/upload.js";
 import { uploadVoiceover } from "../services/voiceover.service.js";
 import { getProject } from "../services/project.service.js";
+import { getSignedAssetUrl } from "../storage/assetStorage.js";
 
 export const voiceoverRouter = Router({ mergeParams: true });
 
@@ -48,6 +49,21 @@ voiceoverRouter.get("/", async (req, res, next) => {
       return;
     }
     res.json(project.voiceover);
+  } catch (err) {
+    next(err);
+  }
+});
+
+voiceoverRouter.get("/url", async (req, res, next) => {
+  try {
+    const { id: projectId } = req.params as { id: string };
+    const project = await getProject(projectId);
+    if (!project || !project.voiceover) {
+      res.status(404).json({ error: "No voiceover uploaded yet" });
+      return;
+    }
+    const url = await getSignedAssetUrl(project.voiceover.mp3Path);
+    res.json({ url });
   } catch (err) {
     next(err);
   }

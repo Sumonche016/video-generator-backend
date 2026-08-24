@@ -24,7 +24,8 @@ clipsRouter.post("/generate-batch", async (req, res, next) => {
 clipsRouter.post("/merge-preview", async (req, res, next) => {
   try {
     const { id: projectId } = req.params as { id: string };
-    res.json(await mergePreviewClips(projectId));
+    const { burnSubtitles, subtitleStyle } = req.body ?? {};
+    res.json(await mergePreviewClips(projectId, { burnSubtitles, subtitleStyle }));
   } catch (err) {
     next(err);
   }

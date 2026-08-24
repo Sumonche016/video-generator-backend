@@ -7,7 +7,8 @@ export const assembleRouter = Router({ mergeParams: true });
 assembleRouter.post("/", async (req, res, next) => {
   try {
     const { id: projectId } = req.params as { id: string };
-    const { project, skippedBlockIndices } = await assembleProject(projectId);
+    const { burnSubtitles, subtitleStyle } = req.body ?? {};
+    const { project, skippedBlockIndices } = await assembleProject(projectId, { burnSubtitles, subtitleStyle });
     res.json({ ...project, skippedBlockIndices });
   } catch (err) {
     next(err);

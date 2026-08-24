@@ -6,6 +6,8 @@ import { promisify } from "node:util";
 import { supabase } from "./../storage/supabaseClient.js";
 import { assetPaths, downloadAsset, uploadAsset, getSignedAssetUrl } from "../storage/assetStorage.js";
 import { getProject, saveProject, advanceStage } from "./project.service.js";
+import { writeSrtFile, burnSubtitles, type SubtitleStyle } from "./subtitle.service.js";
+import { parseElevenLabsTranscript } from "./voiceover.service.js";
 import type { Block } from "../models/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -105,8 +107,33 @@ async function buildSyncedVideo(
   return outputPath;
 }
 
+// Burns captions onto an already-assembled video as a distinct final pass,
+// driven by the project's full voiceover transcript (already in the final
+// video's absolute timeline, so no per-block offsetting is needed). Kept
+// separate from buildSyncedVideo so a captioning fix only re-runs this
+// cheap step instead of re-downloading clips / re-slicing audio / re-concat.
+async function applySubtitles(
+  project: NonNullable<Awaited<ReturnType<typeof getProject>>>,
+  videoPath: string,
+  tmpDir: string,
+  style?: SubtitleStyle
+): Promise<string> {
+  if (!project.voiceover) return videoPath;
+
+  const { buffer } = await downloadAsset(project.voiceover.transcriptPath);
+  const words = parseElevenLabsTranscript(JSON.parse(buffer.toString("utf-8")));
+
+  const srtPath = path.join(tmpDir, "captions.srt");
+  await writeSrtFile(words, srtPath);
+
+  const subtitledPath = path.join(tmpDir, "output_with_subs.mp4");
+  await burnSubtitles(videoPath, srtPath, subtitledPath, style);
+  return subtitledPath;
+}
+
 export async function assembleProject(
-  projectId: string
+  projectId: string,
+  options?: { burnSubtitles?: boolean; subtitleStyle?: SubtitleStyle }
 ): Promise<{ project: Awaited<ReturnType<typeof saveProject>>; skippedBlockIndices: number[] }> {
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
@@ -136,7 +163,7 @@ export async function assembleProject(
     const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
     await fs.writeFile(voiceoverPath, voiceoverBuffer);
 
-    const outputPath = await buildSyncedVideo(
+    let outputPath = await buildSyncedVideo(
       voiceoverPath,
       approvedBlocks.map((b) => ({
         index: b.index,
@@ -146,6 +173,10 @@ export async function assembleProject(
       })),
       tmpDir
     );
+
+    if (options?.burnSubtitles) {
+      outputPath = await applySubtitles(project, outputPath, tmpDir, options.subtitleStyle);
+    }
 
     const finalBuffer = await fs.readFile(outputPath);
     const filename = `output-${project.dimension}-${Date.now()}.mp4`;
@@ -165,7 +196,10 @@ export async function assembleProject(
 // unlike assembleProject, this does NOT require every block to be approved.
 // Plays the real voiceover synced to whichever scenes are shown (sliced
 // per-block, same as the final export), not each clip's own raw audio.
-export async function mergePreviewClips(projectId: string): Promise<{ url: string; mergedCount: number }> {
+export async function mergePreviewClips(
+  projectId: string,
+  options?: { burnSubtitles?: boolean; subtitleStyle?: SubtitleStyle }
+): Promise<{ url: string; mergedCount: number }> {
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
   if (!project.voiceover) throw new Error("No voiceover uploaded");
@@ -193,7 +227,11 @@ export async function mergePreviewClips(projectId: string): Promise<{ url: strin
     const voiceoverPath = path.join(tmpDir, "voiceover.mp3");
     await fs.writeFile(voiceoverPath, voiceoverBuffer);
 
-    const outputPath = await buildSyncedVideo(voiceoverPath, blocks, tmpDir);
+    let outputPath = await buildSyncedVideo(voiceoverPath, blocks, tmpDir);
+
+    if (options?.burnSubtitles) {
+      outputPath = await applySubtitles(project, outputPath, tmpDir, options.subtitleStyle);
+    }
 
     const buffer = await fs.readFile(outputPath);
     const objectKey = assetPaths.preview(projectId, `preview-${Date.now()}.mp4`);

@@ -14,10 +14,12 @@ export function buildScenePlanningUserMessage(params: {
     .join(", ");
 
   const blocksList = params.blocks
-    .map(
-      (b, i) =>
-        `Block ${i} (${b.blockStartSec}s-${b.blockEndSec}s): "${b.blockTranscriptText}"`
-    )
+    .map((b, i) => {
+      const gapNote = b.blockTranscriptText
+        ? ""
+        : " (no narration in this segment — describe an ambient/cutaway visual that fits the surrounding scenes)";
+      return `Block ${i} (${b.blockStartSec}s-${b.blockEndSec}s): "${b.blockTranscriptText}"${gapNote}`;
+    })
     .join("\n");
 
   return `Full script (for context):\n${params.fullScriptText}
