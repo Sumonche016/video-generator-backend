@@ -25,6 +25,9 @@ interface BlockRow {
   clip_attempts: Block["clipAttempts"];
   approved_clip_path: string | null;
   audio_leveling: Block["audioLeveling"];
+  gap_filler_prompt: string;
+  gap_filler_attempts: Block["clipAttempts"];
+  approved_gap_filler_path: string | null;
 }
 
 function mapBlockRow(row: BlockRow): Block {
@@ -40,6 +43,9 @@ function mapBlockRow(row: BlockRow): Block {
     clipAttempts: row.clip_attempts,
     approvedClipPath: row.approved_clip_path,
     audioLeveling: row.audio_leveling,
+    gapFillerPrompt: row.gap_filler_prompt,
+    gapFillerAttempts: row.gap_filler_attempts,
+    approvedGapFillerPath: row.approved_gap_filler_path,
   };
 }
 
@@ -192,11 +198,12 @@ export async function getBlock(projectId: string, index: number): Promise<Block>
 export async function updateBlock(
   projectId: string,
   index: number,
-  patch: { veoPrompt?: string; attachedReferenceNames?: string[] }
+  patch: { veoPrompt?: string; attachedReferenceNames?: string[]; gapFillerPrompt?: string }
 ): Promise<Block> {
   const updates: Record<string, unknown> = {};
   if (patch.veoPrompt !== undefined) updates.veo_prompt = patch.veoPrompt;
   if (patch.attachedReferenceNames !== undefined) updates.attached_reference_names = patch.attachedReferenceNames;
+  if (patch.gapFillerPrompt !== undefined) updates.gap_filler_prompt = patch.gapFillerPrompt;
 
   const { data, error } = await supabase
     .from("blocks")

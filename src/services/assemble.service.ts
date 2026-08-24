@@ -8,6 +8,7 @@ import { assetPaths, downloadAsset, uploadAsset, getSignedAssetUrl } from "../st
 import { getProject, saveProject, advanceStage } from "./project.service.js";
 import { writeSrtFile, burnSubtitles, type SubtitleStyle } from "./subtitle.service.js";
 import { parseElevenLabsTranscript } from "./voiceover.service.js";
+import { probeDurationSeconds } from "./ffprobe.service.js";
 import type { Block } from "../models/index.js";
 
 const execFileAsync = promisify(execFile);
@@ -19,6 +20,7 @@ interface BlockRow {
   approval_status: Block["approvalStatus"];
   approved_clip_path: string | null;
   clip_attempts: { path: string; status: string }[];
+  approved_gap_filler_path: string | null;
 }
 
 export class AssembleValidationError extends Error {
@@ -37,16 +39,52 @@ export class AssembleValidationError extends Error {
 // tracks together instead of leaving a sync-breaking gap.
 async function buildSyncedVideo(
   voiceoverPath: string,
-  blocks: { index: number; startSec: number; endSec: number; clipPath: string }[],
+  blocks: { index: number; startSec: number; endSec: number; clipPath: string; gapFillerPath?: string | null }[],
   tmpDir: string
 ): Promise<string> {
   const clipLocalPaths: string[] = [];
   const audioSegmentPaths: string[] = [];
 
   for (const b of blocks) {
+    const sliceDuration = b.endSec - b.startSec;
     const { buffer } = await downloadAsset(b.clipPath);
+    const rawClipPath = path.join(tmpDir, `clip-raw-${b.index}.mp4`);
+    await fs.writeFile(rawClipPath, buffer);
+
+    // Veo always returns a fixed-length clip (~8s) regardless of what was
+    // requested, so every block's segment is force-fit to exactly its
+    // voiceover slice length here — otherwise a single mismatched block
+    // would drift video-vs-audio sync for every block after it, since the
+    // video and audio tracks are concatenated independently below.
     const clipLocalPath = path.join(tmpDir, `clip-${b.index}.mp4`);
-    await fs.writeFile(clipLocalPath, buffer);
+    const actualDuration = await probeDurationSeconds(buffer, "mp4").catch(() => sliceDuration);
+
+    if (actualDuration >= sliceDuration) {
+      await execFileAsync("ffmpeg", ["-y", "-i", rawClipPath, "-t", String(sliceDuration), "-c", "copy", clipLocalPath]);
+    } else {
+      const shortfall = sliceDuration - actualDuration;
+      if (b.gapFillerPath) {
+        const { buffer: fillerBuffer } = await downloadAsset(b.gapFillerPath);
+        const rawFillerPath = path.join(tmpDir, `filler-raw-${b.index}.mp4`);
+        await fs.writeFile(rawFillerPath, fillerBuffer);
+        const trimmedFillerPath = path.join(tmpDir, `filler-${b.index}.mp4`);
+        await execFileAsync("ffmpeg", ["-y", "-i", rawFillerPath, "-t", String(shortfall), "-c", "copy", trimmedFillerPath]);
+
+        const concatListPath = path.join(tmpDir, `clip-filler-concat-${b.index}.txt`);
+        await fs.writeFile(
+          concatListPath,
+          [rawClipPath, trimmedFillerPath].map((p) => `file '${p.replace(/'/g, "'\\''")}'`).join("\n")
+        );
+        await execFileAsync("ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", concatListPath, "-c", "copy", clipLocalPath]);
+      } else {
+        await execFileAsync("ffmpeg", [
+          "-y",
+          "-i", rawClipPath,
+          "-vf", `tpad=stop_mode=clone:stop_duration=${shortfall}`,
+          clipLocalPath,
+        ]);
+      }
+    }
     clipLocalPaths.push(clipLocalPath);
 
     const segmentPath = path.join(tmpDir, `voiceover-${b.index}.mp3`);
@@ -141,7 +179,7 @@ export async function assembleProject(
 
   const { data: rows, error } = await supabase
     .from("blocks")
-    .select("index, start_sec, end_sec, approval_status, approved_clip_path, clip_attempts")
+    .select("index, start_sec, end_sec, approval_status, approved_clip_path, clip_attempts, approved_gap_filler_path")
     .eq("project_id", projectId)
     .order("index");
   if (error) throw error;
@@ -170,6 +208,7 @@ export async function assembleProject(
         startSec: b.start_sec,
         endSec: b.end_sec,
         clipPath: b.approved_clip_path as string,
+        gapFillerPath: b.approved_gap_filler_path,
       })),
       tmpDir
     );
@@ -206,17 +245,25 @@ export async function mergePreviewClips(
 
   const { data: rows, error } = await supabase
     .from("blocks")
-    .select("index, start_sec, end_sec, approval_status, approved_clip_path, clip_attempts")
+    .select("index, start_sec, end_sec, approval_status, approved_clip_path, clip_attempts, approved_gap_filler_path")
     .eq("project_id", projectId)
     .order("index");
   if (error) throw error;
 
-  const blocks: { index: number; startSec: number; endSec: number; clipPath: string }[] = [];
+  const blocks: { index: number; startSec: number; endSec: number; clipPath: string; gapFillerPath?: string | null }[] = [];
   for (const row of rows as BlockRow[]) {
     if (row.approval_status !== "clip_review" && row.approval_status !== "approved") continue;
     const latestSucceeded = [...row.clip_attempts].reverse().find((a) => a.status === "succeeded");
     const clipPath = row.approved_clip_path ?? latestSucceeded?.path;
-    if (clipPath) blocks.push({ index: row.index, startSec: row.start_sec, endSec: row.end_sec, clipPath });
+    if (clipPath) {
+      blocks.push({
+        index: row.index,
+        startSec: row.start_sec,
+        endSec: row.end_sec,
+        clipPath,
+        gapFillerPath: row.approved_gap_filler_path,
+      });
+    }
   }
 
   if (blocks.length === 0) throw new Error("No generated clips to merge yet");

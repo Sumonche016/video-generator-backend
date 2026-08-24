@@ -64,6 +64,7 @@ export interface ClipAttempt {
   status: "pending" | "running" | "succeeded" | "failed";
   jobId?: string;
   error?: string;
+  durationSeconds?: number;
 }
 
 export interface AudioLeveling {
@@ -91,6 +92,9 @@ export interface Block {
   clipAttempts: ClipAttempt[];
   approvedClipPath: string | null;
   audioLeveling: AudioLeveling;
+  gapFillerPrompt?: string;
+  gapFillerAttempts?: ClipAttempt[];
+  approvedGapFillerPath?: string | null;
 }
 
 export interface Project {

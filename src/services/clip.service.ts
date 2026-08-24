@@ -2,6 +2,7 @@ import { getVideoGenProvider } from "../config/providers.config.js";
 import { supabase } from "../storage/supabaseClient.js";
 import { assetPaths, uploadAsset, downloadAsset } from "../storage/assetStorage.js";
 import { measureVolumeDb, applyAudioGain } from "./audio.service.js";
+import { probeDurationSeconds } from "./ffprobe.service.js";
 import { getProject, advanceStage, saveProject } from "./project.service.js";
 import type { Block, ClipAttempt, LockedRef } from "../models/index.js";
 
@@ -19,6 +20,9 @@ interface BlockRow {
   clip_attempts: ClipAttempt[];
   approved_clip_path: string | null;
   audio_leveling: Block["audioLeveling"];
+  gap_filler_prompt: string;
+  gap_filler_attempts: ClipAttempt[];
+  approved_gap_filler_path: string | null;
 }
 
 function mapBlockRow(row: BlockRow): Block {
@@ -34,6 +38,9 @@ function mapBlockRow(row: BlockRow): Block {
     clipAttempts: row.clip_attempts,
     approvedClipPath: row.approved_clip_path,
     audioLeveling: row.audio_leveling,
+    gapFillerPrompt: row.gap_filler_prompt,
+    gapFillerAttempts: row.gap_filler_attempts,
+    approvedGapFillerPath: row.approved_gap_filler_path,
   };
 }
 
@@ -148,6 +155,13 @@ export async function pollClipStatus(projectId: string, index: number): Promise<
 
   latest.status = "succeeded";
   latest.path = objectKey;
+  try {
+    latest.durationSeconds = await probeDurationSeconds(buffer, "mp4");
+  } catch {
+    // Duration is a nice-to-have signal for the reviewer/assembler; if
+    // ffprobe fails for some reason, assembly still falls back to trimming
+    // safely against the requested slice length.
+  }
 
   // Per the CEO's spec: auto-check the clip's audio volume against the
   // voiceover's — the tool measures both automatically here; whether to
@@ -241,6 +255,110 @@ export async function approveClip(projectId: string, index: number): Promise<Blo
     }
   }
 
+  return mapBlockRow(data as BlockRow);
+}
+
+// Generates a small filler clip to cover the leftover time when a block's
+// main clip comes up short of its voiceover slice (Veo always returns ~8s
+// regardless of what's requested, so a manual filler — trimmed down to the
+// exact shortfall at assembly time — is how a longer slice gets covered).
+export async function generateGapFiller(projectId: string, index: number, prompt: string): Promise<Block> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("Project not found");
+  if (!project.lockedManifest) throw new Error("Project is not locked yet");
+
+  const row = await getBlockRow(projectId, index);
+  const videoGen = getVideoGenProvider();
+  const { jobId } = await videoGen.generateClip({
+    prompt,
+    referenceImages: resolveReferenceImages(project.lockedManifest, row.attached_reference_names),
+    durationSeconds: row.end_sec - row.start_sec,
+    dimension: project.dimension,
+  });
+
+  const attempt: ClipAttempt = { path: "", createdAt: new Date().toISOString(), status: "running", jobId };
+  const gapFillerAttempts = [...row.gap_filler_attempts, attempt];
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update({ gap_filler_attempts: gapFillerAttempts, gap_filler_prompt: prompt })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapBlockRow(data as BlockRow);
+}
+
+export async function pollGapFillerStatus(projectId: string, index: number): Promise<Block> {
+  const row = await getBlockRow(projectId, index);
+  const attempts = row.gap_filler_attempts;
+  const latest = attempts[attempts.length - 1];
+  if (!latest || latest.status !== "running" || !latest.jobId) {
+    return mapBlockRow(row);
+  }
+
+  const videoGen = getVideoGenProvider();
+  const status = await videoGen.pollStatus(latest.jobId);
+
+  if (status.status === "running" || status.status === "pending") {
+    return mapBlockRow(row);
+  }
+
+  if (status.status === "failed") {
+    latest.status = "failed";
+    latest.error = status.error;
+    const { data, error } = await supabase
+      .from("blocks")
+      .update({ gap_filler_attempts: attempts })
+      .eq("project_id", projectId)
+      .eq("index", index)
+      .select()
+      .single();
+    if (error) throw error;
+    return mapBlockRow(data as BlockRow);
+  }
+
+  const videoRes = await fetch(status.videoUrl as string);
+  if (!videoRes.ok) throw new Error(`Failed to download generated filler clip: ${videoRes.status}`);
+  const buffer = Buffer.from(await videoRes.arrayBuffer());
+  const objectKey = assetPaths.blockClip(projectId, index, `gap-filler-attempt-${attempts.length}.mp4`);
+  await uploadAsset(objectKey, buffer, "video/mp4");
+
+  latest.status = "succeeded";
+  latest.path = objectKey;
+  try {
+    latest.durationSeconds = await probeDurationSeconds(buffer, "mp4");
+  } catch {
+    // Same as the main clip: nice-to-have, never fail generation over it.
+  }
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update({ gap_filler_attempts: attempts })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapBlockRow(data as BlockRow);
+}
+
+export async function approveGapFiller(projectId: string, index: number): Promise<Block> {
+  const row = await getBlockRow(projectId, index);
+  const latest = row.gap_filler_attempts[row.gap_filler_attempts.length - 1];
+  if (!latest || latest.status !== "succeeded") {
+    throw new Error("No succeeded gap-filler attempt to approve for this block");
+  }
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update({ approved_gap_filler_path: latest.path })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
   return mapBlockRow(data as BlockRow);
 }
 

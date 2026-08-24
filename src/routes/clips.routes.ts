@@ -1,6 +1,15 @@
 import { Router } from "express";
 import { z } from "zod";
-import { generateNextBatch, pollClipStatus, approveClip, rejectClip, applyDucking } from "../services/clip.service.js";
+import {
+  generateNextBatch,
+  pollClipStatus,
+  approveClip,
+  rejectClip,
+  applyDucking,
+  generateGapFiller,
+  pollGapFillerStatus,
+  approveGapFiller,
+} from "../services/clip.service.js";
 import { mergePreviewClips } from "../services/assemble.service.js";
 import { getSignedAssetUrl } from "../storage/assetStorage.js";
 
@@ -59,6 +68,39 @@ clipsRouter.post("/:index/clip/reject", async (req, res, next) => {
     const { id: projectId, index } = req.params as { id: string; index: string };
     const body = rejectSchema.parse(req.body ?? {});
     res.json(await rejectClip(projectId, Number(index), body.newPrompt));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const gapFillerSchema = z.object({ prompt: z.string().min(1) });
+
+clipsRouter.post("/:index/gap-filler", async (req, res, next) => {
+  try {
+    const { id: projectId, index } = req.params as { id: string; index: string };
+    const body = gapFillerSchema.parse(req.body ?? {});
+    res.json(await generateGapFiller(projectId, Number(index), body.prompt));
+  } catch (err) {
+    next(err);
+  }
+});
+
+clipsRouter.get("/:index/gap-filler-status", async (req, res, next) => {
+  try {
+    const { id: projectId, index } = req.params as { id: string; index: string };
+    const block = await pollGapFillerStatus(projectId, Number(index));
+    const latest = block.gapFillerAttempts?.[block.gapFillerAttempts.length - 1];
+    const gapFillerUrl = latest?.status === "succeeded" ? await getSignedAssetUrl(latest.path) : null;
+    res.json({ ...block, gapFillerUrl });
+  } catch (err) {
+    next(err);
+  }
+});
+
+clipsRouter.post("/:index/gap-filler/approve", async (req, res, next) => {
+  try {
+    const { id: projectId, index } = req.params as { id: string; index: string };
+    res.json(await approveGapFiller(projectId, Number(index)));
   } catch (err) {
     next(err);
   }
