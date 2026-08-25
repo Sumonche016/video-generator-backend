@@ -3,6 +3,7 @@ import { supabase } from "../storage/supabaseClient.js";
 import { assetPaths, uploadAsset, downloadAsset } from "../storage/assetStorage.js";
 import { measureVolumeDb, applyAudioGain } from "./audio.service.js";
 import { probeDurationSeconds } from "./ffprobe.service.js";
+import { trimVideoBuffer, concatVideoBuffers } from "./videoEdit.service.js";
 import { getProject, advanceStage, saveProject } from "./project.service.js";
 import type { Block, ClipAttempt, LockedRef } from "../models/index.js";
 
@@ -258,11 +259,53 @@ export async function approveClip(projectId: string, index: number): Promise<Blo
   return mapBlockRow(data as BlockRow);
 }
 
+function currentClipPath(row: BlockRow): string | null {
+  const latest = row.clip_attempts[row.clip_attempts.length - 1];
+  if (latest?.status === "succeeded" && latest.path) return latest.path;
+  return row.approved_clip_path;
+}
+
+// User-initiated cut: trims the block's current clip right now and makes the
+// trimmed result the new definitive clip immediately (not a value applied
+// later at assembly) — the point is the user sees the actual cut clip
+// in this stage, not a deferred computation.
+export async function trimClip(projectId: string, index: number, trimStartSec: number, trimEndSec: number): Promise<Block> {
+  const row = await getBlockRow(projectId, index);
+  const sourcePath = currentClipPath(row);
+  if (!sourcePath) throw new Error("No clip to trim for this block yet");
+
+  const { buffer } = await downloadAsset(sourcePath);
+  const duration = await probeDurationSeconds(buffer, "mp4");
+  const newDuration = Math.max(0, duration - trimStartSec - trimEndSec);
+  const trimmedBuffer = await trimVideoBuffer(buffer, trimStartSec, newDuration);
+
+  const objectKey = assetPaths.blockClip(projectId, index, `cut-${Date.now()}.mp4`);
+  await uploadAsset(objectKey, trimmedBuffer, "video/mp4");
+
+  const attempt: ClipAttempt = {
+    path: objectKey,
+    createdAt: new Date().toISOString(),
+    status: "succeeded",
+    durationSeconds: await probeDurationSeconds(trimmedBuffer, "mp4").catch(() => newDuration),
+  };
+  const clipAttempts = [...row.clip_attempts, attempt];
+
+  const { data, error } = await supabase
+    .from("blocks")
+    .update({ clip_attempts: clipAttempts, approved_clip_path: objectKey })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapBlockRow(data as BlockRow);
+}
+
 // Generates a small filler clip to cover the leftover time when a block's
 // main clip comes up short of its voiceover slice (Veo always returns ~8s
 // regardless of what's requested, so a manual filler — trimmed down to the
 // exact shortfall at assembly time — is how a longer slice gets covered).
-export async function generateGapFiller(projectId: string, index: number, prompt: string): Promise<Block> {
+export async function generateGapFiller(projectId: string, index: number, prompt: string, referenceNames?: string[]): Promise<Block> {
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
   if (!project.lockedManifest) throw new Error("Project is not locked yet");
@@ -271,7 +314,7 @@ export async function generateGapFiller(projectId: string, index: number, prompt
   const videoGen = getVideoGenProvider();
   const { jobId } = await videoGen.generateClip({
     prompt,
-    referenceImages: resolveReferenceImages(project.lockedManifest, row.attached_reference_names),
+    referenceImages: resolveReferenceImages(project.lockedManifest, referenceNames ?? row.attached_reference_names),
     durationSeconds: row.end_sec - row.start_sec,
     dimension: project.dimension,
   });
@@ -344,16 +387,63 @@ export async function pollGapFillerStatus(projectId: string, index: number): Pro
   return mapBlockRow(data as BlockRow);
 }
 
-export async function approveGapFiller(projectId: string, index: number): Promise<Block> {
+// Composes the block's current clip + the approved filler into ONE clip
+// right now, immediately — the user should see the finished, filled-in
+// result in this stage, not have it silently deferred to final assembly.
+export async function approveGapFiller(
+  projectId: string,
+  index: number,
+  trimSeconds?: number,
+  position: "before" | "after" = "after"
+): Promise<Block> {
   const row = await getBlockRow(projectId, index);
-  const latest = row.gap_filler_attempts[row.gap_filler_attempts.length - 1];
-  if (!latest || latest.status !== "succeeded") {
+  const latestFiller = row.gap_filler_attempts[row.gap_filler_attempts.length - 1];
+  if (!latestFiller || latestFiller.status !== "succeeded") {
     throw new Error("No succeeded gap-filler attempt to approve for this block");
   }
+  const currentPath = currentClipPath(row);
+  if (!currentPath) throw new Error("No main clip to fill for this block yet");
+
+  const sliceDuration = row.end_sec - row.start_sec;
+  const [{ buffer: currentBuffer }, { buffer: fillerBuffer }] = await Promise.all([
+    downloadAsset(currentPath),
+    downloadAsset(latestFiller.path),
+  ]);
+  const fillerActualDuration = await probeDurationSeconds(fillerBuffer, "mp4");
+  let fillerDuration: number;
+  if (trimSeconds != null) {
+    // User picked an explicit length for this custom scene — clamp to what
+    // the generated filler actually has; any remaining mismatch against the
+    // slice is still safely handled by buildSyncedVideo()'s trim/pad net.
+    fillerDuration = Math.max(0, Math.min(trimSeconds, fillerActualDuration));
+  } else {
+    const currentDuration = await probeDurationSeconds(currentBuffer, "mp4");
+    fillerDuration = Math.max(0, sliceDuration - currentDuration);
+  }
+  const trimmedFiller = await trimVideoBuffer(fillerBuffer, 0, fillerDuration);
+  const composedBuffer =
+    position === "before"
+      ? await concatVideoBuffers(trimmedFiller, currentBuffer)
+      : await concatVideoBuffers(currentBuffer, trimmedFiller);
+
+  const objectKey = assetPaths.blockClip(projectId, index, `composed-${Date.now()}.mp4`);
+  await uploadAsset(objectKey, composedBuffer, "video/mp4");
+
+  const attempt: ClipAttempt = {
+    path: objectKey,
+    createdAt: new Date().toISOString(),
+    status: "succeeded",
+    durationSeconds: await probeDurationSeconds(composedBuffer, "mp4").catch(() => sliceDuration),
+  };
+  const clipAttempts = [...row.clip_attempts, attempt];
 
   const { data, error } = await supabase
     .from("blocks")
-    .update({ approved_gap_filler_path: latest.path })
+    .update({
+      clip_attempts: clipAttempts,
+      approved_clip_path: objectKey,
+      approved_gap_filler_path: latestFiller.path,
+    })
     .eq("project_id", projectId)
     .eq("index", index)
     .select()

@@ -9,6 +9,7 @@ import {
   generateGapFiller,
   pollGapFillerStatus,
   approveGapFiller,
+  trimClip,
 } from "../services/clip.service.js";
 import { mergePreviewClips } from "../services/assemble.service.js";
 import { getSignedAssetUrl } from "../storage/assetStorage.js";
@@ -61,6 +62,20 @@ clipsRouter.post("/:index/clip/approve", async (req, res, next) => {
   }
 });
 
+const trimSchema = z.object({ trimStartSec: z.number().min(0), trimEndSec: z.number().min(0) });
+
+clipsRouter.post("/:index/clip/trim", async (req, res, next) => {
+  try {
+    const { id: projectId, index } = req.params as { id: string; index: string };
+    const body = trimSchema.parse(req.body ?? {});
+    const block = await trimClip(projectId, Number(index), body.trimStartSec, body.trimEndSec);
+    const clipUrl = block.approvedClipPath ? await getSignedAssetUrl(block.approvedClipPath) : null;
+    res.json({ ...block, clipUrl });
+  } catch (err) {
+    next(err);
+  }
+});
+
 const rejectSchema = z.object({ newPrompt: z.string().optional() });
 
 clipsRouter.post("/:index/clip/reject", async (req, res, next) => {
@@ -73,13 +88,13 @@ clipsRouter.post("/:index/clip/reject", async (req, res, next) => {
   }
 });
 
-const gapFillerSchema = z.object({ prompt: z.string().min(1) });
+const gapFillerSchema = z.object({ prompt: z.string().min(1), referenceNames: z.array(z.string()).optional() });
 
 clipsRouter.post("/:index/gap-filler", async (req, res, next) => {
   try {
     const { id: projectId, index } = req.params as { id: string; index: string };
     const body = gapFillerSchema.parse(req.body ?? {});
-    res.json(await generateGapFiller(projectId, Number(index), body.prompt));
+    res.json(await generateGapFiller(projectId, Number(index), body.prompt, body.referenceNames));
   } catch (err) {
     next(err);
   }
@@ -97,10 +112,18 @@ clipsRouter.get("/:index/gap-filler-status", async (req, res, next) => {
   }
 });
 
+const approveGapFillerSchema = z.object({
+  trimSeconds: z.number().min(0).optional(),
+  position: z.enum(["before", "after"]).optional(),
+});
+
 clipsRouter.post("/:index/gap-filler/approve", async (req, res, next) => {
   try {
     const { id: projectId, index } = req.params as { id: string; index: string };
-    res.json(await approveGapFiller(projectId, Number(index)));
+    const body = approveGapFillerSchema.parse(req.body ?? {});
+    const block = await approveGapFiller(projectId, Number(index), body.trimSeconds, body.position);
+    const clipUrl = block.approvedClipPath ? await getSignedAssetUrl(block.approvedClipPath) : null;
+    res.json({ ...block, clipUrl });
   } catch (err) {
     next(err);
   }
