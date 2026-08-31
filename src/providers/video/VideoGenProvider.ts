@@ -23,6 +23,9 @@ export interface ClipStatusResult {
   // caller is responsible for downloading and persisting it into our own
   // storage; it is not guaranteed to stay valid long-term.
   videoUrl?: string;
+  // Some providers (e.g. OpenRouter) require an Authorization header to
+  // download the finished clip rather than accepting a bare/query-signed URL.
+  videoHeaders?: Record<string, string>;
   error?: string;
 }
 

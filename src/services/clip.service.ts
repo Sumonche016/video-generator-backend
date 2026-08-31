@@ -148,7 +148,7 @@ export async function pollClipStatus(projectId: string, index: number): Promise<
   }
 
   // succeeded — download from the provider's temporary URL and persist into our own storage.
-  const videoRes = await fetch(status.videoUrl as string);
+  const videoRes = await fetch(status.videoUrl as string, { headers: status.videoHeaders });
   if (!videoRes.ok) throw new Error(`Failed to download generated clip: ${videoRes.status}`);
   const buffer = Buffer.from(await videoRes.arrayBuffer());
   const objectKey = assetPaths.blockClip(projectId, index, `attempt-${attempts.length}.mp4`);
@@ -362,7 +362,7 @@ export async function pollGapFillerStatus(projectId: string, index: number): Pro
     return mapBlockRow(data as BlockRow);
   }
 
-  const videoRes = await fetch(status.videoUrl as string);
+  const videoRes = await fetch(status.videoUrl as string, { headers: status.videoHeaders });
   if (!videoRes.ok) throw new Error(`Failed to download generated filler clip: ${videoRes.status}`);
   const buffer = Buffer.from(await videoRes.arrayBuffer());
   const objectKey = assetPaths.blockClip(projectId, index, `gap-filler-attempt-${attempts.length}.mp4`);

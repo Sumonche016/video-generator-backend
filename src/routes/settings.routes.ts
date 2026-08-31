@@ -15,17 +15,19 @@ settingsRouter.get("/", (_req, res) => {
 const updateSchema = z.object({
   openaiApiKey: z.string().min(1).optional(),
   googleApiKey: z.string().min(1).optional(),
+  openrouterApiKey: z.string().min(1).optional(),
 });
 
 settingsRouter.patch("/", async (req, res, next) => {
   try {
     const body = updateSchema.parse(req.body ?? {});
-    if (!body.openaiApiKey && !body.googleApiKey) {
-      res.status(400).json({ error: "Provide at least one of openaiApiKey or googleApiKey" });
+    if (!body.openaiApiKey && !body.googleApiKey && !body.openrouterApiKey) {
+      res.status(400).json({ error: "Provide at least one of openaiApiKey, googleApiKey, or openrouterApiKey" });
       return;
     }
     if (body.openaiApiKey) await updateApiKey("OPENAI_API_KEY", body.openaiApiKey);
     if (body.googleApiKey) await updateApiKey("GOOGLE_API_KEY", body.googleApiKey);
+    if (body.openrouterApiKey) await updateApiKey("OPENROUTER_API_KEY", body.openrouterApiKey);
     resetProviders();
     res.json({ apiKeys: getMaskedApiKeys() });
   } catch (err) {

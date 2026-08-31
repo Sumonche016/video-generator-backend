@@ -10,11 +10,12 @@ import { supabase } from "../storage/supabaseClient.js";
 export const runtimeConfig = {
   OPENAI_API_KEY: env.OPENAI_API_KEY,
   GOOGLE_API_KEY: env.GOOGLE_API_KEY,
+  OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
 };
 
-export type RuntimeApiKeyName = "OPENAI_API_KEY" | "GOOGLE_API_KEY";
+export type RuntimeApiKeyName = "OPENAI_API_KEY" | "GOOGLE_API_KEY" | "OPENROUTER_API_KEY";
 
-const RUNTIME_KEY_NAMES: RuntimeApiKeyName[] = ["OPENAI_API_KEY", "GOOGLE_API_KEY"];
+const RUNTIME_KEY_NAMES: RuntimeApiKeyName[] = ["OPENAI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"];
 
 export async function loadRuntimeConfig(): Promise<void> {
   const { data, error } = await supabase.from("app_settings").select("key, value").in("key", RUNTIME_KEY_NAMES);
@@ -51,5 +52,6 @@ export function getMaskedApiKeys() {
   return {
     OPENAI_API_KEY: mask(runtimeConfig.OPENAI_API_KEY),
     GOOGLE_API_KEY: mask(runtimeConfig.GOOGLE_API_KEY),
+    OPENROUTER_API_KEY: mask(runtimeConfig.OPENROUTER_API_KEY),
   };
 }

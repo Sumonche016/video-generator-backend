@@ -4,6 +4,7 @@ import type { ImageGenProvider } from "../providers/image/ImageGenProvider.js";
 import type { VideoGenProvider } from "../providers/video/VideoGenProvider.js";
 import { OpenAIProvider } from "../providers/openai/OpenAIProvider.js";
 import { VeoProvider } from "../providers/video/VeoProvider.js";
+import { WanProvider } from "../providers/video/WanProvider.js";
 
 let llmProvider: LLMProvider | null = null;
 let imageGenProvider: ImageGenProvider | null = null;
@@ -35,6 +36,8 @@ export function getVideoGenProvider(): VideoGenProvider {
   if (!videoGenProvider) {
     if (env.VIDEOGEN_PROVIDER === "veo") {
       videoGenProvider = new VeoProvider();
+    } else if (env.VIDEOGEN_PROVIDER === "wan") {
+      videoGenProvider = new WanProvider();
     } else {
       throw new Error(`Unknown VIDEOGEN_PROVIDER: ${env.VIDEOGEN_PROVIDER}`);
     }
