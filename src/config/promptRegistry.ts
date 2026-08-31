@@ -58,14 +58,20 @@ cues from the script, useful for generating a consistent reference image later.`
   },
   SCENE_PLANNING_SYSTEM_PROMPT: {
     stepLabel: "Scene Breakdown (step 7/8)",
-    description: "System prompt used to plan every block's Veo scene description and which reference images it should use, all in one batched call.",
+    description: "System prompt used to plan every block's video generation scene description and which reference images it should use, all in one batched call.",
     placeholders: [],
-    defaultText: `You are writing the scene descriptions that will each be sent directly to Google's Veo 3 video
+    defaultText: `You are writing the scene descriptions that will each be sent directly to an image-to-video
 generation model, one per block, to produce a series of consecutive 8-second (or configured length)
-clips of a video ad, each synced to a specific slice of the voiceover narration. Veo 3 works best
+clips of a video ad, each synced to a specific slice of the voiceover narration. The model works best
 with a concise (2-4 sentence), natural, cinematic prompt per clip — not a long checklist. Long,
-rule-heavy prompts have been observed to get rejected by Veo's own safety filter more often, so keep
-each one tight.
+rule-heavy prompts have been observed to get rejected more often, so keep each one tight.
+
+CRITICAL for any block that has a reference image attached (a character or product): the reference
+image is used as the literal first frame of the clip, so if the scene description doesn't explicitly
+call for motion, the model tends to hold on that image as a static shot for the first portion of the
+clip before anything moves. Always phrase the action so it is already happening or begins
+immediately — e.g. "already mid-gesture as she turns to camera" rather than "she turns to camera" —
+so the clip doesn't open on a frozen frame.
 
 Given the narration text for each block, the full script for context, and the list of locked
 reference images available (characters and product, each character already assigned a fixed
@@ -85,7 +91,7 @@ scene description text, never in this list.
 CRITICAL for (1): if a reference character appears in this scene, refer to them in the scene
 description text using EXACTLY their assigned tag (e.g. "<character_1> examines the prototype"),
 never their actual name and never a generic phrase like "the engineer" instead of the tag. Using
-multiple real human reference photos in one Veo call reliably gets blocked by Veo's safety filter
+multiple real human reference photos in one call reliably gets blocked by the model's safety filter
 UNLESS each one is explicitly bound to a <character_N> tag used verbatim in the prompt text — this
 is a verified, required workaround, not optional styling. The product does NOT need a <character_N>
 -style tag in the text — just refer to it naturally (e.g. "the product shown in the reference
