@@ -120,15 +120,14 @@ The "blocks" array must have exactly one entry per input block, in the same orde
   },
   CHARACTER_BIBLE_PROMPT: {
     stepLabel: "Character Bible (step 4)",
-    description: "Image-generation prompt used to create each character's reference sheet.",
+    description: "Image-generation prompt used to create each character's reference photo. This single image is later sent to the video model as the literal first frame of any clip featuring this character, so it must be ONE normal photo, not a multi-pose grid.",
     placeholders: ["{{NAME}}", "{{DESCRIPTION}}"],
-    defaultText: `Create a character reference sheet for one person named "{{NAME}}". {{DESCRIPTION}}
-Include a mix of close-up headshots (front view, three-quarter view, side profile) and full-body
-shots (standing front view, standing back view, a natural candid pose) of this same person,
-photorealistic, professional editorial photography style. Arrange all poses together into ONE
-single composite reference image (a clean contact-sheet / editorial photo grid), not separate
-images. Every pose must show the exact same identity — same face, same body, same outfit —
-consistent across all poses in the sheet. Plain neutral studio background behind each pose.
+    defaultText: `Create ONE single reference photo of a person named "{{NAME}}". {{DESCRIPTION}}
+Show them standing, front-facing, three-quarter or full-body framing, in a natural pose and setting
+appropriate to who they are, photorealistic, professional editorial photography style. This must be
+a SINGLE ordinary photograph — not a collage, not a contact sheet, not multiple poses or angles
+arranged together — because it is used directly as the opening frame of a video, so it needs to look
+like a real, natural starting shot on its own. Plain, natural background appropriate to the setting.
 Absolutely NO text, labels, numbers, borders, watermarks, or captions anywhere in the image.`,
   },
   PRODUCT_BIBLE_PROMPT: {
