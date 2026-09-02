@@ -72,6 +72,36 @@ export async function generateCharacterBibleCandidates(
   return mapCharacterRow(data as CharacterRow);
 }
 
+// Lets the user upload their own photo instead of generating one with AI —
+// added as a candidate exactly like a generated one, so the existing
+// approve flow (pick a candidatePaths entry) works unchanged.
+export async function uploadCharacterBibleCandidate(
+  projectId: string,
+  characterId: string,
+  file: { buffer: Buffer; mimetype: string; originalname: string }
+): Promise<Character> {
+  const character = await getCharacterRow(projectId, characterId);
+  const ext = file.originalname.includes(".") ? file.originalname.split(".").pop() : "png";
+  const objectKey = assetPaths.characterBible(projectId, character.slug, `uploaded-${Date.now()}.${ext}`);
+  await uploadAsset(objectKey, file.buffer, file.mimetype);
+
+  const bible: BibleAsset = {
+    ...character.bible,
+    candidatePaths: [...character.bible.candidatePaths, objectKey],
+    status: "generating",
+  };
+
+  const { data, error } = await supabase
+    .from("characters")
+    .update({ bible })
+    .eq("id", characterId)
+    .eq("project_id", projectId)
+    .select()
+    .single();
+  if (error) throw error;
+  return mapCharacterRow(data as CharacterRow);
+}
+
 export async function approveCharacterBible(
   projectId: string,
   characterId: string,

@@ -2,6 +2,7 @@ import { Router } from "express";
 import { z } from "zod";
 import {
   generateCharacterBibleCandidates,
+  uploadCharacterBibleCandidate,
   approveCharacterBible,
   signCharacterCandidates,
   getCharacterBibleWithUrls,
@@ -11,6 +12,7 @@ import {
   getProductBibleWithUrls,
 } from "../services/bible.service.js";
 import { getSignedAssetUrl } from "../storage/assetStorage.js";
+import { upload } from "../middleware/upload.js";
 
 export const characterBibleRouter = Router({ mergeParams: true });
 export const productBibleRouter = Router({ mergeParams: true });
@@ -32,6 +34,20 @@ characterBibleRouter.post("/generate", async (req, res, next) => {
     const { id: projectId, charId } = req.params as { id: string; charId: string };
     const body = generateSchema.parse(req.body ?? {});
     const character = await generateCharacterBibleCandidates(projectId, charId, body.refinementPrompt);
+    res.json(await signCharacterCandidates(character));
+  } catch (err) {
+    next(err);
+  }
+});
+
+characterBibleRouter.post("/upload", upload.single("image"), async (req, res, next) => {
+  try {
+    const { id: projectId, charId } = req.params as { id: string; charId: string };
+    if (!req.file) {
+      res.status(400).json({ error: "No image file provided" });
+      return;
+    }
+    const character = await uploadCharacterBibleCandidate(projectId, charId, req.file);
     res.json(await signCharacterCandidates(character));
   } catch (err) {
     next(err);
