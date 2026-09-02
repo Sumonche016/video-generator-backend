@@ -13,6 +13,8 @@ import { assembleRouter } from "./routes/assemble.routes.js";
 import { finalRouter } from "./routes/final.routes.js";
 import { settingsRouter } from "./routes/settings.routes.js";
 import { promptsRouter } from "./routes/prompts.routes.js";
+import { authRouter } from "./routes/auth.routes.js";
+import { requireAuth } from "./middleware/auth.js";
 import { errorHandler } from "./middleware/errorHandler.js";
 
 export function createApp() {
@@ -23,6 +25,10 @@ export function createApp() {
   app.get("/api/health", (_req, res) => {
     res.json({ ok: true });
   });
+
+  app.use("/api/auth", authRouter);
+
+  app.use("/api", requireAuth);
 
   app.use("/api/projects", projectsRouter);
   app.use("/api/projects/:id/product", productRouter);
