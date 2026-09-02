@@ -4,6 +4,7 @@ import { buildReferenceMappingRule } from "./rules/referenceMapping.rule.js";
 import { getIdentityDiversityRule } from "./rules/identityDiversity.rule.js";
 import { buildSingleProductInstanceRule } from "./rules/singleProductInstance.rule.js";
 import { getPhysicalRealismRule } from "./rules/physicalRealism.rule.js";
+import { getNoStaticOpeningRule } from "./rules/noStaticOpening.rule.js";
 
 export interface BuildVeoPromptParams {
   sceneDescription: string;
@@ -28,6 +29,7 @@ export function buildVeoPrompt(params: BuildVeoPromptParams): string {
   const sections = [
     `SCENE (block ${params.blockStartSec}s-${params.blockEndSec}s, dimension ${params.dimension}):\n${params.sceneDescription}`,
     buildReferenceMappingRule(attachedRefs, params.lockedManifest),
+    attachedRefs.length > 0 ? getNoStaticOpeningRule() : "",
     getNoSpokenWordsRule(),
     getIdentityDiversityRule(),
     buildSingleProductInstanceRule(attachedRefs),

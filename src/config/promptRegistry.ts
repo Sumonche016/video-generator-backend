@@ -15,7 +15,8 @@ export type PromptKey =
   | "IDENTITY_DIVERSITY_RULE"
   | "PHYSICAL_REALISM_RULE"
   | "SINGLE_PRODUCT_INSTANCE_RULE"
-  | "REFERENCE_MAPPING_RULE";
+  | "REFERENCE_MAPPING_RULE"
+  | "NO_STATIC_OPENING_RULE";
 
 interface PromptMeta {
   stepLabel: string;
@@ -221,6 +222,12 @@ The human voiceover carries all narration and will be synced separately; the vid
     description: "Fixed rule block appended to every scene's Veo prompt, requiring real-world physical continuity (no duplication/teleporting/morphing).",
     placeholders: [],
     defaultText: `Maintain real-world physical continuity throughout: no object duplication, teleporting, morphing, or impossible transitions — treat it as continuous live-action footage.`,
+  },
+  NO_STATIC_OPENING_RULE: {
+    stepLabel: "Every video prompt with a reference image",
+    description: "Fixed rule block appended when a character or product reference image is attached, telling the model not to open on a frozen shot of that reference image.",
+    placeholders: [],
+    defaultText: `Do not display the reference image as a static frame. Begin immediately with natural motion from the first frame. The reference image is only for visual identity and scene consistency. No freeze frame, no still-image hold, no static opening.`,
   },
   SINGLE_PRODUCT_INSTANCE_RULE: {
     stepLabel: "Every Veo prompt with a product",
