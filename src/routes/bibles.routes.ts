@@ -7,6 +7,7 @@ import {
   signCharacterCandidates,
   getCharacterBibleWithUrls,
   generateProductBibleCandidates,
+  uploadProductBibleCandidate,
   approveProductBible,
   signProductCandidates,
   getProductBibleWithUrls,
@@ -82,6 +83,21 @@ productBibleRouter.post("/generate", async (req, res, next) => {
     const { id: projectId } = req.params as { id: string };
     const body = generateSchema.parse(req.body ?? {});
     const project = await generateProductBibleCandidates(projectId, body.refinementPrompt);
+    const candidateUrls = await signProductCandidates(project);
+    res.json({ ...project, candidateUrls });
+  } catch (err) {
+    next(err);
+  }
+});
+
+productBibleRouter.post("/upload", upload.single("image"), async (req, res, next) => {
+  try {
+    const { id: projectId } = req.params as { id: string };
+    if (!req.file) {
+      res.status(400).json({ error: "No image file provided" });
+      return;
+    }
+    const project = await uploadProductBibleCandidate(projectId, req.file);
     const candidateUrls = await signProductCandidates(project);
     res.json({ ...project, candidateUrls });
   } catch (err) {

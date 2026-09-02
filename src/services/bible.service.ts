@@ -181,6 +181,28 @@ export async function generateProductBibleCandidates(projectId: string, refineme
   return saveProject(project);
 }
 
+// Lets the user upload their own product photo instead of generating one
+// with AI — added as a candidate exactly like a generated one, so the
+// existing approve flow (pick a candidatePaths entry) works unchanged.
+export async function uploadProductBibleCandidate(
+  projectId: string,
+  file: { buffer: Buffer; mimetype: string; originalname: string }
+) {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("Project not found");
+
+  const ext = file.originalname.includes(".") ? file.originalname.split(".").pop() : "png";
+  const objectKey = assetPaths.productBible(projectId, `uploaded-${Date.now()}.${ext}`);
+  await uploadAsset(objectKey, file.buffer, file.mimetype);
+
+  project.bibles.product = {
+    ...project.bibles.product,
+    candidatePaths: [...project.bibles.product.candidatePaths, objectKey],
+    status: "generating",
+  };
+  return saveProject(project);
+}
+
 export async function approveProductBible(projectId: string, chosenImagePath: string) {
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
