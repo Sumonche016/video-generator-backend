@@ -7,18 +7,25 @@ import { supabase } from "../storage/supabaseClient.js";
 // live when the user saves new keys (updateApiKey). Providers must read
 // these values fresh on every call rather than caching them, so a key
 // change takes effect immediately.
+export type VideoGenProviderName = "veo" | "wan" | "omni";
+
 export const runtimeConfig = {
   OPENAI_API_KEY: env.OPENAI_API_KEY,
   GOOGLE_API_KEY: env.GOOGLE_API_KEY,
   OPENROUTER_API_KEY: env.OPENROUTER_API_KEY,
+  VIDEOGEN_PROVIDER: env.VIDEOGEN_PROVIDER as VideoGenProviderName,
 };
 
 export type RuntimeApiKeyName = "OPENAI_API_KEY" | "GOOGLE_API_KEY" | "OPENROUTER_API_KEY";
 
 const RUNTIME_KEY_NAMES: RuntimeApiKeyName[] = ["OPENAI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"];
+const VIDEOGEN_PROVIDER_KEY = "VIDEOGEN_PROVIDER";
 
 export async function loadRuntimeConfig(): Promise<void> {
-  const { data, error } = await supabase.from("app_settings").select("key, value").in("key", RUNTIME_KEY_NAMES);
+  const { data, error } = await supabase
+    .from("app_settings")
+    .select("key, value")
+    .in("key", [...RUNTIME_KEY_NAMES, VIDEOGEN_PROVIDER_KEY]);
   if (error) {
     // Table may not exist yet if the migration hasn't been run — fall back
     // to .env silently rather than crashing server startup over this.
@@ -29,7 +36,20 @@ export async function loadRuntimeConfig(): Promise<void> {
     if (RUNTIME_KEY_NAMES.includes(row.key as RuntimeApiKeyName) && row.value) {
       runtimeConfig[row.key as RuntimeApiKeyName] = row.value;
     }
+    if (row.key === VIDEOGEN_PROVIDER_KEY && row.value) {
+      runtimeConfig.VIDEOGEN_PROVIDER = row.value as VideoGenProviderName;
+    }
   }
+}
+
+// Not a secret — chosen from a fixed dropdown, sent back to the frontend
+// plainly (unlike the masked API keys below).
+export async function updateVideoGenProvider(provider: VideoGenProviderName): Promise<void> {
+  const { error } = await supabase
+    .from("app_settings")
+    .upsert({ key: VIDEOGEN_PROVIDER_KEY, value: provider, updated_at: new Date().toISOString() });
+  if (error) throw error;
+  runtimeConfig.VIDEOGEN_PROVIDER = provider;
 }
 
 export async function updateApiKey(key: RuntimeApiKeyName, value: string): Promise<void> {

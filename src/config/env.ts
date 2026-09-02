@@ -5,7 +5,7 @@ const envSchema = z.object({
   PORT: z.coerce.number().default(4000),
   LLM_PROVIDER: z.enum(["openai"]).default("openai"),
   IMAGEGEN_PROVIDER: z.enum(["openai"]).default("openai"),
-  VIDEOGEN_PROVIDER: z.enum(["veo", "wan"]).default("wan"),
+  VIDEOGEN_PROVIDER: z.enum(["veo", "wan", "omni"]).default("wan"),
   OPENAI_API_KEY: z.string().optional(),
   GOOGLE_API_KEY: z.string().optional(),
   OPENROUTER_API_KEY: z.string().optional(),
