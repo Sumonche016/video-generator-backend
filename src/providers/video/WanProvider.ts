@@ -1,6 +1,6 @@
 import { runtimeConfig } from "../../config/runtimeConfig.js";
 import { getSignedAssetUrl } from "../../storage/assetStorage.js";
-import { trimVideoBuffer } from "../../services/videoEdit.service.js";
+import { trimVideoBufferPrecise } from "../../services/videoEdit.service.js";
 import type {
   VideoGenProvider,
   GenerateClipParams,
@@ -131,7 +131,7 @@ export class WanProvider implements VideoGenProvider {
         return { status: "failed", error: `Failed to download Wan clip for lead-in trim: ${videoRes.status}` };
       }
       const rawBuffer = Buffer.from(await videoRes.arrayBuffer());
-      const trimmed = await trimVideoBuffer(rawBuffer, context.leadInSeconds, context.targetDurationSeconds);
+      const trimmed = await trimVideoBufferPrecise(rawBuffer, context.leadInSeconds, context.targetDurationSeconds);
       return { status: "succeeded", videoBuffer: trimmed };
     }
 

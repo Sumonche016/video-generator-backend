@@ -29,6 +29,29 @@ export async function trimVideoBuffer(buffer: Buffer, startSec: number, duration
   }
 }
 
+// Same cut as trimVideoBuffer but frame-accurate: "-c copy" can only cut on
+// the input's actual keyframe boundaries, so a short/sub-keyframe-interval
+// trim (e.g. shaving a ~1-2s lead-in off a generated clip) can silently snap
+// back to an earlier keyframe and cut far less than requested. Re-encoding
+// instead makes the seek land on the exact requested frame. Used only where
+// that precision actually matters — WanProvider's lead-in trim — not for
+// the user-facing "Cut" action, which intentionally stays instant/lossless.
+export async function trimVideoBufferPrecise(buffer: Buffer, startSec: number, durationSec: number): Promise<Buffer> {
+  const inPath = await tmpFile("mp4");
+  const outPath = await tmpFile("mp4");
+  await fs.writeFile(inPath, buffer);
+  try {
+    const args = ["-y"];
+    if (startSec > 0) args.push("-ss", String(startSec));
+    args.push("-i", inPath, "-t", String(Math.max(0, durationSec)), "-c:v", "libx264", "-c:a", "aac", outPath);
+    await execFileAsync("ffmpeg", args);
+    return await fs.readFile(outPath);
+  } finally {
+    await fs.rm(inPath, { force: true });
+    await fs.rm(outPath, { force: true });
+  }
+}
+
 // Concatenates two clip buffers back-to-back (main clip + filler) into one
 // file — used when the user approves a gap-filler to compose the final clip
 // for a block immediately, rather than deferring composition to assembly.
