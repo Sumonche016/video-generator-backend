@@ -7,7 +7,7 @@ import { supabase } from "../storage/supabaseClient.js";
 // live when the user saves new keys (updateApiKey). Providers must read
 // these values fresh on every call rather than caching them, so a key
 // change takes effect immediately.
-export type VideoGenProviderName = "veo" | "wan" | "omni";
+export type VideoGenProviderName = "veo" | "wan" | "omni" | "flow";
 
 export const runtimeConfig = {
   OPENAI_API_KEY: env.OPENAI_API_KEY,

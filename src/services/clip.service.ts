@@ -159,7 +159,20 @@ export async function pollClipStatus(projectId: string, index: number): Promise<
     buffer = Buffer.from(await videoRes.arrayBuffer());
   }
   const objectKey = assetPaths.blockClip(projectId, index, `attempt-${attempts.length}.mp4`);
-  await uploadAsset(objectKey, buffer, "video/mp4");
+  try {
+    await uploadAsset(objectKey, buffer, "video/mp4");
+  } catch (uploadErr) {
+    // Surface this loudly: a failed upload here used to look identical to
+    // "still generating" from the UI, because the block never left
+    // clip_generating and nothing was logged. The provider keeps the
+    // downloaded bytes, so the next poll retries this same upload.
+    console.error(
+      `clip.service: failed to store clip for block ${index} (${(buffer.length / 1024 / 1024).toFixed(2)} MB) — will retry on the next poll`,
+      uploadErr
+    );
+    throw uploadErr;
+  }
+  console.log(`clip.service: stored clip for block ${index} at ${objectKey}`);
 
   latest.status = "succeeded";
   latest.path = objectKey;

@@ -7,6 +7,7 @@ import { OpenAIProvider } from "../providers/openai/OpenAIProvider.js";
 import { VeoProvider } from "../providers/video/VeoProvider.js";
 import { WanProvider } from "../providers/video/WanProvider.js";
 import { OmniProvider } from "../providers/video/OmniProvider.js";
+import { FlowProvider } from "../providers/video/FlowProvider.js";
 
 let llmProvider: LLMProvider | null = null;
 let imageGenProvider: ImageGenProvider | null = null;
@@ -17,6 +18,7 @@ let imageGenProvider: ImageGenProvider | null = null;
 let veoProvider: VeoProvider | null = null;
 let wanProvider: WanProvider | null = null;
 let omniProvider: OmniProvider | null = null;
+let flowProvider: FlowProvider | null = null;
 
 export function getLLMProvider(): LLMProvider {
   if (!llmProvider) {
@@ -41,11 +43,16 @@ export function getImageGenProvider(): ImageGenProvider {
 }
 
 export function getVideoGenProvider(): VideoGenProvider {
-  const provider = runtimeConfig.VIDEOGEN_PROVIDER;
-  if (provider === "veo") return (veoProvider ??= new VeoProvider());
-  if (provider === "wan") return (wanProvider ??= new WanProvider());
-  if (provider === "omni") return (omniProvider ??= new OmniProvider());
-  throw new Error(`Unknown VIDEOGEN_PROVIDER: ${provider}`);
+  // API-based video providers are disabled for now in favor of the Flow
+  // browser-automation provider below. Left in place (commented) so they
+  // can be re-enabled later. Any provider value other than "flow" —
+  // including a "veo"/"wan"/"omni" left over from before this switch,
+  // e.g. saved in the app_settings table from the Settings page — falls
+  // back to "flow" rather than throwing.
+  // if (provider === "veo") return (veoProvider ??= new VeoProvider());
+  // if (provider === "wan") return (wanProvider ??= new WanProvider());
+  // if (provider === "omni") return (omniProvider ??= new OmniProvider());
+  return (flowProvider ??= new FlowProvider());
 }
 
 // Providers that construct a vendor SDK client (e.g. OpenAI's) bake the API

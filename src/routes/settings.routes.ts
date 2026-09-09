@@ -16,7 +16,7 @@ const updateSchema = z.object({
   openaiApiKey: z.string().min(1).optional(),
   googleApiKey: z.string().min(1).optional(),
   openrouterApiKey: z.string().min(1).optional(),
-  videoProvider: z.enum(["veo", "wan", "omni"]).optional(),
+  videoProvider: z.enum(["veo", "wan", "omni", "flow"]).optional(),
 });
 
 settingsRouter.patch("/", async (req, res, next) => {

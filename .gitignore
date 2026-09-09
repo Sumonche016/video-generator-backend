@@ -13,3 +13,7 @@ npm-debug.log*
 !.vscode/extensions.json
 .idea
 tsconfig.tsbuildinfo
+
+# Page dumps/screenshots from Flow automation runs: they capture a
+# logged-in Google session (signed media URLs, cookie/reCAPTCHA iframes).
+debug-screenshots/
