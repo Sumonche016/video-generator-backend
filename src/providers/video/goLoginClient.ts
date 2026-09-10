@@ -17,6 +17,12 @@ async function startGoLoginProfile(
   const goLogin = new GoLogin({
     token: env.GOLOGIN_API_TOKEN,
     profile_id: profileId,
+    // Chrome refuses to start as root ("Running as root without --no-sandbox
+    // is not supported") and the deploy runs the backend as root. Making
+    // chrome-sandbox setuid is not enough on newer Orbita builds, so the flag
+    // is the only way through. Linux-only: on a dev machine the browser runs
+    // as a normal user and keeps its sandbox.
+    extra_params: process.platform === "linux" ? ["--no-sandbox"] : [],
   });
 
   const { wsUrl } = await goLogin.start();
