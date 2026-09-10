@@ -30,6 +30,23 @@ const DOWNLOAD_TIMEOUT_MS = 2 * 60 * 1000;
 // How long a finished result is kept so a failed persist can be retried.
 const RESULT_RETENTION_MS = 30 * 60 * 1000;
 
+// undici (node's global fetch) reports every network failure as the same
+// opaque "fetch failed" TypeError and puts the real reason — ENOTFOUND,
+// ECONNREFUSED, socket hang up, a TLS error — on err.cause. Since the GoLogin
+// SDK does all of its API and profile-download traffic through fetch, an
+// unwrapped message says nothing about what actually broke, so walk the cause
+// chain and append it.
+function describeError(err: unknown): string {
+  const parts: string[] = [];
+  let current: unknown = err;
+  for (let depth = 0; current instanceof Error && depth < 5; depth += 1) {
+    const code = (current as NodeJS.ErrnoException).code;
+    parts.push(`${current.message.split("\n")[0]}${code ? ` (${code})` : ""}`);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return parts.join(" ← ") || String(err);
+}
+
 // A randomized pause between actions so the automation doesn't hammer the
 // page instantly click-click-click (an obvious automation tell that's also
 // exactly the kind of pattern Google's abuse detection looks for) — also
@@ -829,7 +846,7 @@ export class FlowProvider implements VideoGenProvider {
             (result.error ? ` — ${result.error}` : "")
         );
       } catch (err) {
-        console.error(`FlowProvider: ${jobId} threw — ${(err as Error).message.split("\n")[0]}`);
+        console.error(`FlowProvider: ${jobId} threw — ${describeError(err)}`);
         this.results.set(jobId, {
           result: { status: "failed", error: (err as Error).message },
           resolvedAt: Date.now(),
