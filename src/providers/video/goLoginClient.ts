@@ -2,6 +2,31 @@ import { chromium, type Browser, type Page } from "playwright";
 import GoLogin from "gologin";
 import { env } from "../../config/env.js";
 
+// Extra Chrome flags handed to Orbita on top of the ones GoLogin builds
+// itself (proxy, timezone, fingerprint masking, user-data-dir).
+function buildOrbitaFlags(): string[] {
+  const flags: string[] = [];
+
+  // Chrome refuses to start as root ("Running as root without --no-sandbox is
+  // not supported") and the deploy runs the backend as root. Making
+  // chrome-sandbox setuid is not enough on Orbita 150+, so the flag is the
+  // only way through. Linux-only: on a dev machine the browser runs as a
+  // normal user and keeps its sandbox.
+  if (process.platform === "linux") flags.push("--no-sandbox");
+
+  if (env.FLOW_BROWSER_MODE === "headless") {
+    // Chrome still needs a window size in headless or it reports a tiny
+    // viewport, which changes what Flow renders and breaks the selectors.
+    flags.push("--headless=new", "--window-size=1920,1080");
+  } else if (env.FLOW_BROWSER_MODE === "offscreen") {
+    // A real window, just moved far outside the visible desktop. Keeps the
+    // full non-headless fingerprint while staying out of the way.
+    flags.push("--window-position=-32000,-32000");
+  }
+
+  return flags;
+}
+
 // Starts the GoLogin antidetect profile (downloading/launching its Orbita
 // browser locally via the official SDK) and returns the CDP websocket
 // endpoint for it. The profile is expected to already be logged into
@@ -17,12 +42,7 @@ async function startGoLoginProfile(
   const goLogin = new GoLogin({
     token: env.GOLOGIN_API_TOKEN,
     profile_id: profileId,
-    // Chrome refuses to start as root ("Running as root without --no-sandbox
-    // is not supported") and the deploy runs the backend as root. Making
-    // chrome-sandbox setuid is not enough on newer Orbita builds, so the flag
-    // is the only way through. Linux-only: on a dev machine the browser runs
-    // as a normal user and keeps its sandbox.
-    extra_params: process.platform === "linux" ? ["--no-sandbox"] : [],
+    extra_params: buildOrbitaFlags(),
   });
 
   const { wsUrl } = await goLogin.start();
