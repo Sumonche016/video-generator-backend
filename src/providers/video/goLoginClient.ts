@@ -39,10 +39,16 @@ async function startGoLoginProfile(
     throw new Error("GOLOGIN_API_TOKEN must be set to use the Flow video provider");
   }
 
+  const extraParams = buildOrbitaFlags();
+  console.log(
+    `goLoginClient: FLOW_BROWSER_MODE=${env.FLOW_BROWSER_MODE}` +
+      (extraParams.length ? ` — extra flags: ${extraParams.join(" ")}` : "")
+  );
+
   const goLogin = new GoLogin({
     token: env.GOLOGIN_API_TOKEN,
     profile_id: profileId,
-    extra_params: buildOrbitaFlags(),
+    extra_params: extraParams,
   });
 
   const { wsUrl } = await goLogin.start();
