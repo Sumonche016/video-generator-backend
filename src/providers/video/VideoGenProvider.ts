@@ -34,7 +34,31 @@ export interface ClipStatusResult {
   error?: string;
 }
 
+// One captured log line from a provider that drives a browser and so has
+// progress worth showing the user while a clip renders.
+export interface ProviderLogEntry {
+  seq: number;
+  ts: number;
+  level: "log" | "warn" | "error";
+  important: boolean;
+  message: string;
+}
+
+export interface ProviderLogPage {
+  entries: ProviderLogEntry[];
+  nextCursor: number;
+  dropped: number;
+  finished: boolean;
+}
+
 export interface VideoGenProvider {
   generateClip(params: GenerateClipParams): Promise<GenerateClipResult>;
   pollStatus(jobId: string): Promise<ClipStatusResult>;
+
+  // Optional: only providers that do long-running local work can be stopped
+  // or can report progress. An API-backed provider (veo/wan/omni) hands the
+  // job to someone else's queue and has neither, so these stay undefined and
+  // callers guard with a typeof check.
+  abortRun?(jobId: string, reason: string): boolean;
+  getRunLog?(jobId: string, since: number, includeAll: boolean): ProviderLogPage;
 }

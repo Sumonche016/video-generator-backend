@@ -72,7 +72,15 @@ export async function getFlowBrowserPage(profileId: string): Promise<{
   // down Playwright's side of a CDP connection, so goLogin.stop() (which
   // actually terminates the Orbita process) is called too. Errors from
   // either are swallowed so one failing doesn't skip the other.
+  // A stopped run closes the browser from the registry to interrupt whatever
+  // Playwright call it was parked on, and then its own teardown path closes
+  // again on the way out — so this has to be safe to call twice. Without the
+  // guard, goLogin.stop() would run twice against the same profile.
+  let closed = false;
   const close = async () => {
+    if (closed) return;
+    closed = true;
+
     // Close the Flow tabs first. The profile launches with
     // --restore-last-session, so any tab left open is restored on the next
     // run — which is how a later run could start already sitting inside an

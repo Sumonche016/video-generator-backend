@@ -118,6 +118,30 @@ export async function generateNextBatch(
   return updated;
 }
 
+// Records a failed attempt and puts the block back to prompt_approved so the
+// user can simply re-select it. Shared by the poll path and the stop path so
+// the two can never drift on what "failed" means — in particular, forgetting
+// to revert approval_status would strand the block in clip_generating forever.
+async function markAttemptFailed(
+  projectId: string,
+  index: number,
+  attempts: ClipAttempt[],
+  latest: ClipAttempt,
+  error: string | undefined
+): Promise<Block> {
+  latest.status = "failed";
+  latest.error = error;
+  const { data, error: dbError } = await supabase
+    .from("blocks")
+    .update({ clip_attempts: attempts, approval_status: "prompt_approved" })
+    .eq("project_id", projectId)
+    .eq("index", index)
+    .select()
+    .single();
+  if (dbError) throw dbError;
+  return mapBlockRow(data as BlockRow);
+}
+
 export async function pollClipStatus(projectId: string, index: number): Promise<Block> {
   const row = await getBlockRow(projectId, index);
   const attempts = row.clip_attempts;
@@ -134,17 +158,7 @@ export async function pollClipStatus(projectId: string, index: number): Promise<
   }
 
   if (status.status === "failed") {
-    latest.status = "failed";
-    latest.error = status.error;
-    const { data, error } = await supabase
-      .from("blocks")
-      .update({ clip_attempts: attempts, approval_status: "prompt_approved" })
-      .eq("project_id", projectId)
-      .eq("index", index)
-      .select()
-      .single();
-    if (error) throw error;
-    return mapBlockRow(data as BlockRow);
+    return markAttemptFailed(projectId, index, attempts, latest, status.error);
   }
 
   // succeeded — get the finished clip's bytes and persist into our own storage.
@@ -214,6 +228,65 @@ export async function pollClipStatus(projectId: string, index: number): Promise<
     .single();
   if (error) throw error;
   return mapBlockRow(data as BlockRow);
+}
+
+// Stops a clip that is still generating.
+//
+// Deliberately idempotent and forgiving: the UI can fire this the instant a
+// clip finishes on its own, and a server restart loses the provider's in-memory
+// registry entirely. In both cases the block still needs to come out of
+// clip_generating, so the DB is updated whether or not a live run was found.
+export async function stopClip(projectId: string, index: number): Promise<Block> {
+  const row = await getBlockRow(projectId, index);
+  const attempts = row.clip_attempts;
+  const latest = attempts[attempts.length - 1];
+  if (!latest || latest.status !== "running" || !latest.jobId) {
+    return mapBlockRow(row);
+  }
+
+  const videoGen = getVideoGenProvider();
+  videoGen.abortRun?.(latest.jobId, "Stopped by user");
+
+  return markAttemptFailed(projectId, index, attempts, latest, "Stopped by user");
+}
+
+export async function stopAllClips(projectId: string): Promise<Block[]> {
+  const { data, error } = await supabase
+    .from("blocks")
+    .select("index")
+    .eq("project_id", projectId)
+    .eq("approval_status", "clip_generating");
+  if (error) throw error;
+
+  const indices = (data ?? []).map((row) => (row as { index: number }).index);
+  return Promise.all(indices.map((index) => stopClip(projectId, index)));
+}
+
+export interface ClipLogPage {
+  entries: { seq: number; ts: number; level: string; important: boolean; message: string }[];
+  nextCursor: number;
+  dropped: number;
+  finished: boolean;
+}
+
+export async function getClipLog(
+  projectId: string,
+  index: number,
+  since: number,
+  includeAll: boolean
+): Promise<ClipLogPage> {
+  const row = await getBlockRow(projectId, index);
+  const latest = row.clip_attempts[row.clip_attempts.length - 1];
+  const videoGen = getVideoGenProvider();
+
+  // A block that has never been generated, or a provider with no log support,
+  // is not an error — the panel polls opportunistically, so report an empty
+  // finished page rather than a 404 it would have to special-case.
+  if (!latest?.jobId || !videoGen.getRunLog) {
+    return { entries: [], nextCursor: since, dropped: 0, finished: true };
+  }
+
+  return videoGen.getRunLog(latest.jobId, since, includeAll);
 }
 
 export async function applyDucking(projectId: string, index: number, duckingFactor: number): Promise<Block> {

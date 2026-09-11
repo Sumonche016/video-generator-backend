@@ -15,7 +15,29 @@ import {
   acquireFlowProfile,
   describeFlowPool,
 } from "./goLoginProfilePool.js";
-import { installFlowLogPrefix, withFlowRunLabel } from "./flowRunContext.js";
+import {
+  abortableDelay,
+  currentFlowRun,
+  installFlowLogPrefix,
+  throwIfAborted,
+  withFlowRun,
+} from "./flowRunContext.js";
+import {
+  createFlowLogBuffer,
+  finishFlowLogBuffer,
+  pruneFlowLogBuffers,
+  readFlowLog,
+  RESULT_RETENTION_MS,
+  type FlowLogPage,
+} from "./flowLogBuffer.js";
+import {
+  abortFlowRun,
+  abortReasonOf,
+  attachClose,
+  finishFlowRun,
+  markAcquired,
+  registerFlowRun,
+} from "./flowRunRegistry.js";
 
 // Tag every log line a concurrent run produces with which run it came from.
 installFlowLogPrefix();
@@ -27,8 +49,8 @@ const FLOW_URL = "https://labs.google/fx/tools/flow";
 const DEBUG_DIR = path.resolve("debug-screenshots");
 const RENDER_TIMEOUT_MS = 5 * 60 * 1000;
 const DOWNLOAD_TIMEOUT_MS = 2 * 60 * 1000;
-// How long a finished result is kept so a failed persist can be retried.
-const RESULT_RETENTION_MS = 30 * 60 * 1000;
+// How long a finished result is kept so a failed persist can be retried. Owned
+// by flowLogBuffer so the result and its log always age out together.
 
 // undici (node's global fetch) reports every network failure as the same
 // opaque "fetch failed" TypeError and puts the real reason — ENOTFOUND,
@@ -55,7 +77,10 @@ function describeError(err: unknown): string {
 // Widened from a tight 400-1100ms band to something closer to how long a
 // person actually pauses between actions on a page.
 function humanPause(minMs = 700, maxMs = 2200): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, minMs + Math.random() * (maxMs - minMs)));
+  // abortableDelay rather than a bare setTimeout so a stop lands during the
+  // pause instead of up to 2.2s later — these are scattered through the whole
+  // run, so waiting them out would make every stop feel sluggish.
+  return abortableDelay(minMs + Math.random() * (maxMs - minMs));
 }
 
 // Longer pause used right after a page navigation/load, standing in for the
@@ -71,6 +96,43 @@ async function readingPause(page: Page): Promise<void> {
     const y = Math.random() * viewport.height;
     await page.mouse.move(x, y, { steps: 10 + Math.floor(Math.random() * 15) });
     await humanPause(500, 1100);
+  }
+}
+
+// Flow bounces a profile with a dead Google session to its sign-in screen,
+// usually a beat after domcontentloaded rather than as part of the initial
+// navigation, so sample for a moment rather than checking once.
+const SIGNED_OUT_URL = /accounts\.google\.com|\/fx\/api\/auth\/signin|[?&]error=Callback/i;
+
+// Fails a run immediately when the profile is not logged in.
+//
+// This is placed before any click helper on purpose: those fall back to asking
+// an LLM where an element is, which on a sign-in page burns a few cents and
+// ~10s to conclude the obvious. Failing at the navigation boundary structurally
+// skips all of that, and the error names the profile so it is clear which one
+// needs re-authenticating.
+async function assertFlowSignedIn(page: Page, profileId: string): Promise<void> {
+  for (let attempt = 0; attempt < 6; attempt++) {
+    const url = page.url();
+    if (SIGNED_OUT_URL.test(url)) {
+      throw new Error(
+        `GoLogin profile ${profileId} is not signed in to Google (landed on ${url}). ` +
+          `Open the profile in GoLogin, sign in to labs.google/fx, then retry.`
+      );
+    }
+    // Clearly on Flow itself — nothing more to wait for.
+    if (/\/fx\/tools\/flow|\/project\//.test(url)) return;
+    await abortableDelay(500);
+  }
+
+  // Some sign-outs render in place rather than redirecting, so fall back to
+  // looking for the button itself before letting the run continue.
+  const signInButton = page.getByRole("button", { name: /sign in/i });
+  if (await signInButton.isVisible({ timeout: 1000 }).catch(() => false)) {
+    throw new Error(
+      `GoLogin profile ${profileId} is not signed in to Google (sign-in screen at ${page.url()}). ` +
+        `Open the profile in GoLogin, sign in to labs.google/fx, then retry.`
+    );
   }
 }
 
@@ -214,7 +276,7 @@ async function waitForUploadsToFinish(page: Page, timeoutMs = 120000): Promise<v
     const uploading = await page.getByText("Uploading", { exact: true }).count().catch(() => 0);
     if (uploading === 0) return;
     console.log(`FlowProvider: waiting for ${uploading} reference image upload(s) to finish`);
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    await abortableDelay(3000);
   }
   // Rather than pressing on with uploads that never landed (and then
   // failing confusingly a few steps later), let the agent look at the page:
@@ -790,7 +852,9 @@ async function waitForNewRenderedVideo(
       );
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 3000));
+    // The run spends most of its life here, so this is the checkpoint that
+    // decides whether a stop feels immediate or takes minutes.
+    await abortableDelay(3000);
   }
 
   await saveDebugScreenshot(page, "render-wait-timeout");
@@ -827,17 +891,42 @@ export class FlowProvider implements VideoGenProvider {
     const jobId = `flow_${nanoid()}`;
     this.results.set(jobId, { result: { status: "pending" }, resolvedAt: null });
 
-    console.log(
-      `FlowProvider: queued ${jobId} (${params.referenceImages.length} reference image(s)) — ` +
-        describeFlowPool()
-    );
-    void (async () => {
-      const { profileId, release } = await acquireFlowProfile();
-      console.log(`FlowProvider: starting ${jobId} on profile ${profileId}`);
-      this.results.set(jobId, { result: { status: "running" }, resolvedAt: null });
-      const startedAt = Date.now();
+    // Registered synchronously, before anything is awaited, so a stop that
+    // arrives while the run is still queueing for a profile finds it.
+    const controller = registerFlowRun(jobId);
+    createFlowLogBuffer(jobId);
+
+    const startedAt = Date.now();
+
+    // The whole body runs inside the run context — including the queue wait,
+    // so "waiting for a profile" is captured into this job's log too, which
+    // is exactly what someone staring at a stuck clip wants to see.
+    void withFlowRun({ jobId, label: jobId.slice(5, 11) }, async () => {
+      // Held only for the window where this function still owns the profile.
+      // runFlow takes ownership the moment it is entered, so this is cleared
+      // immediately before calling it.
+      let release: (() => void) | undefined;
       try {
-        const result = await this.runFlow(params, profileId, release);
+        console.log(
+          `FlowProvider: queued ${jobId} (${params.referenceImages.length} reference image(s)) — ` +
+            describeFlowPool()
+        );
+
+        const acquired = await acquireFlowProfile(controller.signal);
+        release = acquired.release;
+        markAcquired(jobId, acquired.profileId, acquired.profileIndex);
+        // Covers the race where a slot was handed over in the same tick the
+        // abort fired, so the waiter could not be spliced out of the queue.
+        throwIfAborted();
+
+        console.log(
+          `FlowProvider: starting ${jobId} on profile ${acquired.profileId} ` +
+            `(p${acquired.profileIndex}) — ${describeFlowPool()}`
+        );
+        this.results.set(jobId, { result: { status: "running" }, resolvedAt: null });
+
+        release = undefined;
+        const result = await this.runFlow(params, acquired.profileId, acquired.release);
         this.results.set(jobId, { result, resolvedAt: Date.now() });
         const seconds = Math.round((Date.now() - startedAt) / 1000);
         console.log(
@@ -846,18 +935,48 @@ export class FlowProvider implements VideoGenProvider {
             (result.error ? ` — ${result.error}` : "")
         );
       } catch (err) {
-        console.error(`FlowProvider: ${jobId} threw — ${describeError(err)}`);
+        // A stopped run can surface as anything — a checkpoint's FlowAbortError,
+        // or whatever Playwright call happened to reject first when the browser
+        // was closed out from under it ("Target page ... has been closed").
+        // The registry knows why the run really ended, so prefer it over the
+        // error that happened to arrive, rather than sniffing error strings.
+        const reason = abortReasonOf(jobId);
+        const seconds = Math.round((Date.now() - startedAt) / 1000);
+        const message = reason ?? describeError(err);
+        if (reason) console.log(`FlowProvider: ${jobId} stopped after ${seconds}s — ${reason}`);
+        else console.error(`FlowProvider: ${jobId} threw — ${message}`);
+
         this.results.set(jobId, {
-          result: { status: "failed", error: (err as Error).message },
+          result: { status: "failed", error: message },
           resolvedAt: Date.now(),
         });
+
+        // Only reachable when the run was stopped before runFlow took over —
+        // otherwise runFlow gives the profile back itself, once its Orbita
+        // browser has actually shut down, so the next clip never starts on a
+        // profile that is still closing.
+        if (release) {
+          release();
+          console.log(`FlowProvider: released the profile — ${describeFlowPool()}`);
+        }
+      } finally {
+        finishFlowRun(jobId);
+        finishFlowLogBuffer(jobId);
       }
-      // No release() here on purpose: runFlow gives the profile back only
-      // once its Orbita browser has actually shut down, so the next clip
-      // never starts on a profile that is still closing.
-    })().catch(() => undefined);
+    }).catch(() => undefined);
 
     return { jobId };
+  }
+
+  // Stops an in-flight run. Returns false if the job is already finished or
+  // unknown (a restart loses the registry), in which case the caller still
+  // needs to unstick the block's own state.
+  abortRun(jobId: string, reason: string): boolean {
+    return abortFlowRun(jobId, reason);
+  }
+
+  getRunLog(jobId: string, since: number, includeAll: boolean): FlowLogPage {
+    return readFlowLog(jobId, since, includeAll);
   }
 
   async pollStatus(jobId: string): Promise<ClipStatusResult> {
@@ -875,6 +994,7 @@ export class FlowProvider implements VideoGenProvider {
     // stops polling once it records the clip, so this is not re-done
     // needlessly; entries are pruned by age instead.
     this.pruneResolvedResults();
+    pruneFlowLogBuffers();
     return entry.result;
   }
 
@@ -904,8 +1024,12 @@ export class FlowProvider implements VideoGenProvider {
       throw err;
     }
     const { page, close } = session;
+    // From here on a stop can tear the browser down, which is what interrupts
+    // whatever Playwright call the run is parked on.
+    const ctx = currentFlowRun();
+    if (ctx) attachClose(ctx.jobId, close);
     try {
-      const result = await this.runFlowOnPage(page, params);
+      const result = await this.runFlowOnPage(page, params, profileId);
       console.log("FlowProvider: run finished, handing back the clip (closing the profile in the background)");
       return result;
     } finally {
@@ -924,8 +1048,18 @@ export class FlowProvider implements VideoGenProvider {
     }
   }
 
-  private async runFlowOnPage(page: Page, params: GenerateClipParams): Promise<ClipStatusResult> {
+  private async runFlowOnPage(
+    page: Page,
+    params: GenerateClipParams,
+    profileId: string
+  ): Promise<ClipStatusResult> {
     await page.goto(FLOW_URL, { waitUntil: "domcontentloaded" });
+    // Before anything else: a profile whose Google session has expired lands
+    // on a sign-in screen, and every step below would then fail slowly and
+    // expensively (an 8s selector timeout plus an LLM call asking where the
+    // "New project" button is on a page that only offers "Sign in").
+    await assertFlowSignedIn(page, profileId);
+    throwIfAborted();
     await readingPause(page);
 
     // GoLogin's --restore-last-session can drop us straight back into the
@@ -1009,6 +1143,7 @@ export class FlowProvider implements VideoGenProvider {
           await writeFile(tmpFile, imageBuffer);
           tmpFiles.push(tmpFile);
         }
+        throwIfAborted();
         console.log(`FlowProvider: attaching ${tmpFiles.length} reference image(s): ${tmpFiles.join(", ")}`);
 
         // "Upload media" only exists inside the attach-media panel, which is
@@ -1153,6 +1288,7 @@ export class FlowProvider implements VideoGenProvider {
         .or(page.locator('[data-slate-editor="true"]'))
         .first();
 
+    throwIfAborted();
     console.log(`FlowProvider: pasting the prompt (${params.prompt.length} chars)`);
     try {
       await fillWithAiFallback({
@@ -1268,6 +1404,7 @@ export class FlowProvider implements VideoGenProvider {
     // the tile and click through a menu at all.
     try {
       const absoluteUrl = new URL(renderedSrc, page.url()).toString();
+      throwIfAborted();
       console.log(`FlowProvider: downloading the clip from ${absoluteUrl.slice(0, 120)}`);
       const response = await page.context().request.get(absoluteUrl);
       if (!response.ok()) {

@@ -1,4 +1,5 @@
 import { env } from "../../config/env.js";
+import { FlowAbortError } from "./flowRunContext.js";
 
 // The Flow provider drives a real browser for a whole clip, so the number
 // of clips that can be generated at once is exactly the number of GoLogin
@@ -53,7 +54,7 @@ export function describeFlowPool(): string {
   return `${total} profile(s), ${idle} idle, ${waiters.length} clip(s) waiting`;
 }
 
-export async function acquireFlowProfile(): Promise<{
+export async function acquireFlowProfile(signal?: AbortSignal): Promise<{
   profileId: string;
   // 1-based position in the configured list, used to label this run's logs
   // so three concurrent runs stay readable.
@@ -62,7 +63,9 @@ export async function acquireFlowProfile(): Promise<{
 }> {
   ensureInitialized();
 
-  const slot = available.shift() ?? (await new Promise<Slot>((resolve) => waiters.push(resolve)));
+  if (signal?.aborted) throw new FlowAbortError("Stopped before a profile was available");
+
+  const slot = available.shift() ?? (await waitForSlot(signal));
 
   let released = false;
   const release = () => {
@@ -75,4 +78,33 @@ export async function acquireFlowProfile(): Promise<{
   };
 
   return { profileId: slot.profileId, profileIndex: slot.index, release };
+}
+
+// Queues for a free profile, giving up if the run is stopped while waiting.
+//
+// The abort path has to splice the waiter out of the queue: leaving it there
+// means a later release() hands it a slot nobody is listening for, and that
+// slot is never returned to `available` — the pool would silently shrink by
+// one for every stopped queued clip.
+function waitForSlot(signal?: AbortSignal): Promise<Slot> {
+  return new Promise<Slot>((resolve, reject) => {
+    const waiter: Waiter = (slot) => {
+      cleanup();
+      resolve(slot);
+    };
+    const onAbort = () => {
+      const at = waiters.indexOf(waiter);
+      // If it has already been shifted off, the slot is on its way to this
+      // run: let it resolve normally and leave the abort to the checkpoint
+      // right after acquireFlowProfile returns, which releases properly.
+      if (at === -1) return;
+      waiters.splice(at, 1);
+      cleanup();
+      reject(new FlowAbortError("Stopped before a profile was available"));
+    };
+    const cleanup = () => signal?.removeEventListener("abort", onAbort);
+
+    waiters.push(waiter);
+    signal?.addEventListener("abort", onAbort, { once: true });
+  });
 }

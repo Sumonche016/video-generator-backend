@@ -10,6 +10,9 @@ import {
   pollGapFillerStatus,
   approveGapFiller,
   trimClip,
+  stopClip,
+  stopAllClips,
+  getClipLog,
 } from "../services/clip.service.js";
 import { mergePreviewClips } from "../services/assemble.service.js";
 import { getSignedAssetUrl } from "../storage/assetStorage.js";
@@ -36,6 +39,46 @@ clipsRouter.post("/merge-preview", async (req, res, next) => {
     const { id: projectId } = req.params as { id: string };
     const { burnSubtitles, subtitleStyle } = req.body ?? {};
     res.json(await mergePreviewClips(projectId, { burnSubtitles, subtitleStyle }));
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Registered before the "/:index/..." routes so the literal path always wins.
+clipsRouter.post("/stop-all", async (req, res, next) => {
+  try {
+    const { id: projectId } = req.params as { id: string };
+    res.json(await stopAllClips(projectId));
+  } catch (err) {
+    next(err);
+  }
+});
+
+const clipLogQuerySchema = z.object({
+  // Cursor: the highest seq the client has already seen.
+  since: z.coerce.number().int().min(0).default(0),
+  // Include the lines the classifier filed as noise. Not z.coerce.boolean():
+  // that goes through Boolean(), so the string "0" would come out true.
+  all: z
+    .string()
+    .optional()
+    .transform((value) => value === "1" || value === "true"),
+});
+
+clipsRouter.get("/:index/clip-log", async (req, res, next) => {
+  try {
+    const { id: projectId, index } = req.params as { id: string; index: string };
+    const query = clipLogQuerySchema.parse(req.query ?? {});
+    res.json(await getClipLog(projectId, Number(index), query.since, query.all));
+  } catch (err) {
+    next(err);
+  }
+});
+
+clipsRouter.post("/:index/clip/stop", async (req, res, next) => {
+  try {
+    const { id: projectId, index } = req.params as { id: string; index: string };
+    res.json(await stopClip(projectId, Number(index)));
   } catch (err) {
     next(err);
   }

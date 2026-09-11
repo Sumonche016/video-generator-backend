@@ -26,6 +26,15 @@ const envSchema = z.object({
   // On Linux the deploy runs under Xvfb, so "visible" there is already
   // headless in the practical sense — the window renders to a virtual display.
   FLOW_BROWSER_MODE: z.enum(["visible", "offscreen", "headless"]).default("visible"),
+  // Hard ceiling on a single Flow run once it has a profile, after which it is
+  // aborted and the profile freed. The legitimate worst case is roughly
+  // 9-10 min (5 min render + 2 min download + up to 90s of GoLogin profile
+  // download + uploads and pauses), so 12 leaves headroom without letting a
+  // wedged run sit on a profile for an hour.
+  FLOW_RUN_TIMEOUT_MS: z.coerce.number().default(12 * 60 * 1000),
+  // Separate, much more generous ceiling on waiting for a free profile — a
+  // batch of 10 clips across 2 profiles queues legitimately for a long time.
+  FLOW_QUEUE_TIMEOUT_MS: z.coerce.number().default(30 * 60 * 1000),
   AUTH_USERNAME: z.string().min(1),
   AUTH_PASSWORD: z.string().min(1),
   AUTH_TOKEN: z.string().min(16),
